@@ -1,0 +1,40 @@
+{
+  "appName": "Panzek CLI",
+  "deploys": [
+    {
+      "key": "laravel-vps-production",
+      "label": "Laravel → VPS Production",
+      "description": "Build asset lalu deploy Laravel ke server production",
+      "cwd": ".",
+      "steps": [
+        "composer install --no-dev --optimize-autoloader",
+        "npm install",
+        "npm run build",
+        "php artisan migrate --force",
+        "php artisan optimize:clear",
+        "php artisan optimize"
+      ]
+    },
+    {
+      "key": "react-static-hosting",
+      "label": "React → Static Hosting",
+      "description": "Build React project untuk hosting statis",
+      "cwd": ".",
+      "steps": [
+        "npm install",
+        "npm run build"
+      ]
+    },
+    {
+      "key": "nextjs-vps-pm2",
+      "label": "Next.js → VPS PM2",
+      "description": "Build lalu restart app Next.js via PM2",
+      "cwd": ".",
+      "steps": [
+        "npm install",
+        "npm run build",
+        "pm2 restart ecosystem.config.js --env production"
+      ]
+    }
+  ]
+}
