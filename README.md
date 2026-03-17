@@ -4,7 +4,7 @@ CLI interaktif untuk deploy dan maintenance project Laravel di server. Fokusnya 
 
 ## Preview
 
-![Preview terminal Panzek CLI](./assets/terminal-preview.svg)
+![Preview terminal Panzek CLI](./assets/terminal-preview.svg?v=2)
 
 ## Fitur Utama
 
