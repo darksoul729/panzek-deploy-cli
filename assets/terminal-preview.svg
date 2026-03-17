@@ -1,75 +1,60 @@
-<svg width="1400" height="900" viewBox="0 0 1400 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="1400" height="920" viewBox="0 0 1400 920" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="140" y1="80" x2="1240" y2="820" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1f2937"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111827"/>
       <stop offset="1" stop-color="#0f172a"/>
     </linearGradient>
-    <linearGradient id="panel" x1="170" y1="130" x2="1230" y2="760" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#111827"/>
-      <stop offset="1" stop-color="#020617"/>
-    </linearGradient>
-    <linearGradient id="glow" x1="225" y1="185" x2="1130" y2="640" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#fb923c" stop-opacity="0.2"/>
-      <stop offset="0.5" stop-color="#38bdf8" stop-opacity="0.12"/>
-      <stop offset="1" stop-color="#22c55e" stop-opacity="0.14"/>
-    </linearGradient>
-    <filter id="shadow" x="110" y="70" width="1180" height="780" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="shadow" x="56" y="56" width="1288" height="808" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feFlood flood-opacity="0" result="BackgroundImageFix"/>
       <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
-      <feOffset dy="22"/>
-      <feGaussianBlur stdDeviation="22"/>
-      <feColorMatrix type="matrix" values="0 0 0 0 0.00784314 0 0 0 0 0.0392157 0 0 0 0 0.0862745 0 0 0 0.45 0"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.00784314 0 0 0 0 0.0392157 0 0 0 0 0.0862745 0 0 0 0.38 0"/>
       <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
       <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
     </filter>
+    <style>
+      .mono { font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre; }
+      .amber { fill: #fbbf24; }
+      .cyan { fill: #7dd3fc; }
+      .white { fill: #e5e7eb; }
+      .muted { fill: #94a3b8; }
+      .green { fill: #86efac; }
+    </style>
   </defs>
 
-  <rect width="1400" height="900" fill="url(#bg)"/>
-  <circle cx="1240" cy="120" r="210" fill="#1d4ed8" fill-opacity="0.08"/>
-  <circle cx="180" cy="760" r="250" fill="#f97316" fill-opacity="0.08"/>
+  <rect width="1400" height="920" fill="url(#bg)"/>
+  <circle cx="1220" cy="120" r="190" fill="#1d4ed8" fill-opacity="0.06"/>
+  <circle cx="140" cy="810" r="220" fill="#f97316" fill-opacity="0.05"/>
 
   <g filter="url(#shadow)">
-    <rect x="150" y="110" width="1100" height="700" rx="26" fill="url(#panel)"/>
-    <rect x="150.75" y="110.75" width="1098.5" height="698.5" rx="25.25" stroke="#334155" stroke-width="1.5"/>
+    <rect x="92" y="82" width="1216" height="748" rx="22" fill="#020617"/>
+    <rect x="92.75" y="82.75" width="1214.5" height="746.5" rx="21.25" stroke="#1f2937" stroke-width="1.5"/>
   </g>
 
-  <rect x="180" y="142" width="1040" height="64" rx="14" fill="#0f172a"/>
-  <rect x="180.5" y="142.5" width="1039" height="63" rx="13.5" stroke="#1e293b"/>
-  <circle cx="220" cy="174" r="9" fill="#ef4444"/>
-  <circle cx="252" cy="174" r="9" fill="#f59e0b"/>
-  <circle cx="284" cy="174" r="9" fill="#22c55e"/>
-  <text x="700" y="181" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="24" text-anchor="middle">panzek CLI preview</text>
+  <text x="130" y="130" class="mono green" font-size="22">$ panzek</text>
 
-  <rect x="220" y="232" width="960" height="214" rx="18" fill="#0b1220"/>
-  <rect x="220.5" y="232.5" width="959" height="213" rx="17.5" stroke="#fb923c" stroke-opacity="0.6"/>
-  <rect x="220" y="232" width="960" height="214" rx="18" fill="url(#glow)"/>
+  <text x="130" y="184" class="mono amber" font-size="20">╭───────────────────────────────── Panzek CLI ─────────────────────────────────╮</text>
+  <text x="130" y="218" class="mono amber" font-size="20">│  ██████╗  █████╗ ███╗   ██╗███████╗███████╗██╗  ██╗                          │</text>
+  <text x="130" y="252" class="mono amber" font-size="20">│  ██╔══██╗██╔══██╗████╗  ██║╚══███╔╝██╔════╝██║ ██╔╝                          │</text>
+  <text x="130" y="286" class="mono amber" font-size="20">│  ██████╔╝███████║██╔██╗ ██║  ███╔╝ █████╗  █████╔╝                           │</text>
+  <text x="130" y="320" class="mono amber" font-size="20">│  ██╔═══╝ ██╔══██║██║╚██╗██║ ███╔╝  ██╔══╝  ██╔═██╗                           │</text>
+  <text x="130" y="354" class="mono amber" font-size="20">│  ██║     ██║  ██║██║ ╚████║███████╗███████╗██║  ██╗                          │</text>
+  <text x="130" y="388" class="mono amber" font-size="20">│  ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝                          │</text>
+  <text x="130" y="422" class="mono amber" font-size="20">│                                                                              │</text>
+  <text x="130" y="456" class="mono muted" font-size="20">│  Deploy Laravel, siapkan database, atur Nginx, dan publish tunnel dari satu  │</text>
+  <text x="130" y="490" class="mono muted" font-size="20">│  CLI.                                                                        │</text>
+  <text x="130" y="524" class="mono amber" font-size="20">╰──────────────────────────────────────────────────────────────────────────────╯</text>
 
-  <text x="260" y="286" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="42" font-weight="700">Panzek CLI</text>
-  <text x="260" y="330" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="24">Deploy Laravel, siapkan database, atur Nginx, dan publish tunnel</text>
-  <text x="260" y="364" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="24">dari satu workflow terminal yang rapi.</text>
-  <text x="260" y="410" fill="#fbbf24" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">Menu: Deploy Laravel | Setup Nginx | Setup Cloudflare | Update Project</text>
-
-  <rect x="220" y="482" width="460" height="252" rx="18" fill="#0b1220"/>
-  <rect x="220.5" y="482.5" width="459" height="251" rx="17.5" stroke="#38bdf8" stroke-opacity="0.65"/>
-  <text x="252" y="524" fill="#7dd3fc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="24" font-weight="700">Rencana Eksekusi</text>
-  <text x="252" y="570" fill="#fbbf24" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">01</text>
-  <text x="304" y="570" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">composer install --no-dev --optimize-autoloader</text>
-  <text x="252" y="614" fill="#fbbf24" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">02</text>
-  <text x="304" y="614" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">npm install</text>
-  <text x="252" y="658" fill="#fbbf24" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">03</text>
-  <text x="304" y="658" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">npm run build</text>
-
-  <rect x="706" y="482" width="474" height="252" rx="18" fill="#0b1220"/>
-  <rect x="706.5" y="482.5" width="473" height="251" rx="17.5" stroke="#22c55e" stroke-opacity="0.65"/>
-  <text x="738" y="524" fill="#86efac" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="24" font-weight="700">Ringkasan Deploy</text>
-  <text x="738" y="570" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">Repo</text>
-  <text x="906" y="570" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">github.com/user/app.git</text>
-  <text x="738" y="612" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">Target</text>
-  <text x="906" y="612" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">/var/www/laravel-app</text>
-  <text x="738" y="654" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">Mode</text>
-  <text x="906" y="654" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">Jalankan langsung</text>
-  <text x="738" y="696" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">Status</text>
-  <text x="906" y="696" fill="#4ade80" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="22">siap diproses</text>
-
-  <text x="700" y="795" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace" font-size="20" text-anchor="middle">Preview terminal untuk README. Tampilan aktual mengikuti ukuran terminal, warna, dan workflow yang dipilih.</text>
+  <text x="130" y="590" class="mono white" font-size="20">│</text>
+  <text x="130" y="626" class="mono cyan" font-size="20">◆  Pilih menu utama</text>
+  <text x="130" y="662" class="mono white" font-size="20">│  ● Deploy Laravel</text>
+  <text x="400" y="662" class="mono muted" font-size="20">(repo + env + DB + artisan)</text>
+  <text x="130" y="698" class="mono white" font-size="20">│  ○ Setup Nginx</text>
+  <text x="400" y="698" class="mono muted" font-size="20">(buat dan aktifkan virtual host)</text>
+  <text x="130" y="734" class="mono white" font-size="20">│  ○ Setup Cloudflare</text>
+  <text x="400" y="734" class="mono muted" font-size="20">(cloudflared tunnel tanpa IPv4 publik)</text>
+  <text x="130" y="770" class="mono white" font-size="20">│  ○ Update Project</text>
+  <text x="400" y="770" class="mono muted" font-size="20">(pilih project lalu update otomatis)</text>
+  <text x="130" y="806" class="mono white" font-size="20">└</text>
 </svg>
