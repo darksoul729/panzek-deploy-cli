@@ -22,6 +22,12 @@ CLI interaktif untuk deploy dan maintenance project Laravel di server. Fokusnya 
 
 ## Instalasi
 
+Install global dari npm setelah package ini dipublish:
+
+```bash
+npm install -g panzek-cli
+```
+
 Install global dari source lokal:
 
 ```bash
@@ -34,6 +40,34 @@ Atau jalankan langsung dari folder project:
 npm install
 npm start
 ```
+
+## Panduan Global
+
+Jika sudah terinstall secara global, command yang dipakai adalah:
+
+```bash
+panzek
+```
+
+Untuk update versi global:
+
+```bash
+npm install -g panzek-cli@latest
+```
+
+Untuk hapus instalasi global:
+
+```bash
+npm uninstall -g panzek-cli
+```
+
+Jika command `panzek` belum terbaca, cek lokasi binary global npm:
+
+```bash
+npm bin -g
+```
+
+Pastikan hasil path tersebut sudah masuk ke `PATH` shell Anda.
 
 ## Menjalankan
 

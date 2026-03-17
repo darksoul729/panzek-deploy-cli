@@ -1,18 +1,5 @@
 <svg width="1400" height="920" viewBox="0 0 1400 920" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="920" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#111827"/>
-      <stop offset="1" stop-color="#0f172a"/>
-    </linearGradient>
-    <filter id="shadow" x="56" y="56" width="1288" height="808" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
-      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
-      <feOffset dy="18"/>
-      <feGaussianBlur stdDeviation="18"/>
-      <feColorMatrix type="matrix" values="0 0 0 0 0.00784314 0 0 0 0 0.0392157 0 0 0 0 0.0862745 0 0 0 0.38 0"/>
-      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
-      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
-    </filter>
     <style>
       .mono { font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre; }
       .amber { fill: #fbbf24; }
@@ -23,38 +10,28 @@
     </style>
   </defs>
 
-  <rect width="1400" height="920" fill="url(#bg)"/>
-  <circle cx="1220" cy="120" r="190" fill="#1d4ed8" fill-opacity="0.06"/>
-  <circle cx="140" cy="810" r="220" fill="#f97316" fill-opacity="0.05"/>
-
-  <g filter="url(#shadow)">
-    <rect x="92" y="82" width="1216" height="748" rx="22" fill="#020617"/>
-    <rect x="92.75" y="82.75" width="1214.5" height="746.5" rx="21.25" stroke="#1f2937" stroke-width="1.5"/>
-  </g>
+  <rect width="1400" height="920" fill="#000000"/>
 
   <text x="130" y="130" class="mono green" font-size="22">$ panzek</text>
 
-  <text x="130" y="184" class="mono amber" font-size="20">╭───────────────────────────────── Panzek CLI ─────────────────────────────────╮</text>
-  <text x="130" y="218" class="mono amber" font-size="20">│  ██████╗  █████╗ ███╗   ██╗███████╗███████╗██╗  ██╗                          │</text>
-  <text x="130" y="252" class="mono amber" font-size="20">│  ██╔══██╗██╔══██╗████╗  ██║╚══███╔╝██╔════╝██║ ██╔╝                          │</text>
-  <text x="130" y="286" class="mono amber" font-size="20">│  ██████╔╝███████║██╔██╗ ██║  ███╔╝ █████╗  █████╔╝                           │</text>
-  <text x="130" y="320" class="mono amber" font-size="20">│  ██╔═══╝ ██╔══██║██║╚██╗██║ ███╔╝  ██╔══╝  ██╔═██╗                           │</text>
-  <text x="130" y="354" class="mono amber" font-size="20">│  ██║     ██║  ██║██║ ╚████║███████╗███████╗██║  ██╗                          │</text>
-  <text x="130" y="388" class="mono amber" font-size="20">│  ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝                          │</text>
-  <text x="130" y="422" class="mono amber" font-size="20">│                                                                              │</text>
-  <text x="130" y="456" class="mono muted" font-size="20">│  Deploy Laravel, siapkan database, atur Nginx, dan publish tunnel dari satu  │</text>
-  <text x="130" y="490" class="mono muted" font-size="20">│  CLI.                                                                        │</text>
-  <text x="130" y="524" class="mono amber" font-size="20">╰──────────────────────────────────────────────────────────────────────────────╯</text>
+  <text x="130" y="184" class="mono amber" font-size="20">██████╗  █████╗ ███╗   ██╗███████╗███████╗██╗  ██╗</text>
+  <text x="130" y="218" class="mono amber" font-size="20">██╔══██╗██╔══██╗████╗  ██║╚══███╔╝██╔════╝██║ ██╔╝</text>
+  <text x="130" y="252" class="mono amber" font-size="20">██████╔╝███████║██╔██╗ ██║  ███╔╝ █████╗  █████╔╝</text>
+  <text x="130" y="286" class="mono amber" font-size="20">██╔═══╝ ██╔══██║██║╚██╗██║ ███╔╝  ██╔══╝  ██╔═██╗</text>
+  <text x="130" y="320" class="mono amber" font-size="20">██║     ██║  ██║██║ ╚████║███████╗███████╗██║  ██╗</text>
+  <text x="130" y="354" class="mono amber" font-size="20">╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝</text>
+  <text x="130" y="420" class="mono muted" font-size="20">Deploy Laravel, siapkan database, atur Nginx, dan publish tunnel dari satu</text>
+  <text x="130" y="454" class="mono muted" font-size="20">CLI.</text>
 
-  <text x="130" y="590" class="mono white" font-size="20">│</text>
-  <text x="130" y="626" class="mono cyan" font-size="20">◆  Pilih menu utama</text>
-  <text x="130" y="662" class="mono white" font-size="20">│  ● Deploy Laravel</text>
-  <text x="400" y="662" class="mono muted" font-size="20">(repo + env + DB + artisan)</text>
-  <text x="130" y="698" class="mono white" font-size="20">│  ○ Setup Nginx</text>
-  <text x="400" y="698" class="mono muted" font-size="20">(buat dan aktifkan virtual host)</text>
-  <text x="130" y="734" class="mono white" font-size="20">│  ○ Setup Cloudflare</text>
-  <text x="400" y="734" class="mono muted" font-size="20">(cloudflared tunnel tanpa IPv4 publik)</text>
-  <text x="130" y="770" class="mono white" font-size="20">│  ○ Update Project</text>
-  <text x="400" y="770" class="mono muted" font-size="20">(pilih project lalu update otomatis)</text>
-  <text x="130" y="806" class="mono white" font-size="20">└</text>
+  <text x="130" y="560" class="mono white" font-size="20">│</text>
+  <text x="130" y="596" class="mono cyan" font-size="20">◆  Pilih menu utama</text>
+  <text x="130" y="632" class="mono white" font-size="20">│  ● Deploy Laravel</text>
+  <text x="400" y="632" class="mono muted" font-size="20">(repo + env + DB + artisan)</text>
+  <text x="130" y="668" class="mono white" font-size="20">│  ○ Setup Nginx</text>
+  <text x="400" y="668" class="mono muted" font-size="20">(buat dan aktifkan virtual host)</text>
+  <text x="130" y="704" class="mono white" font-size="20">│  ○ Setup Cloudflare</text>
+  <text x="400" y="704" class="mono muted" font-size="20">(cloudflared tunnel tanpa IPv4 publik)</text>
+  <text x="130" y="740" class="mono white" font-size="20">│  ○ Update Project</text>
+  <text x="400" y="740" class="mono muted" font-size="20">(pilih project lalu update otomatis)</text>
+  <text x="130" y="776" class="mono white" font-size="20">└</text>
 </svg>
