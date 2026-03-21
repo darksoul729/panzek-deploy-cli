@@ -1,5 +1,5 @@
 {
-  "appName": "Panzek CLI",
+  "appName": "Panzek Deploy CLI",
   "deploys": [
     {
       "key": "laravel-vps-production",

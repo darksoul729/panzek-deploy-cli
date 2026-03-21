@@ -1,10 +1,10 @@
-# Panzek CLI
+# Panzek Deploy CLI
 
 CLI interaktif untuk deploy dan maintenance project Laravel di server. Fokusnya bukan hanya menjalankan command, tetapi membuat alur deploy, update, setup database, setup Nginx, dan Cloudflare Tunnel terasa rapi saat dipakai langsung di terminal.
 
 ## Preview
 
-![Preview terminal Panzek CLI](./assets/terminal-preview.svg?v=2)
+![Preview terminal Panzek Deploy CLI](./assets/terminal-preview.svg?v=2)
 
 ## Fitur Utama
 
@@ -22,10 +22,10 @@ CLI interaktif untuk deploy dan maintenance project Laravel di server. Fokusnya 
 
 ## Instalasi
 
-Install global dari npm setelah package ini dipublish:
+Install global dari npm:
 
 ```bash
-npm install -g panzek-cli
+npm install -g panzek-deploy-cli
 ```
 
 Install global dari source lokal:
@@ -46,22 +46,22 @@ npm start
 Jika sudah terinstall secara global, command yang dipakai adalah:
 
 ```bash
-panzek
+panzek-deploy
 ```
 
 Untuk update versi global:
 
 ```bash
-npm install -g panzek-cli@latest
+npm install -g panzek-deploy-cli@latest
 ```
 
 Untuk hapus instalasi global:
 
 ```bash
-npm uninstall -g panzek-cli
+npm uninstall -g panzek-deploy-cli
 ```
 
-Jika command `panzek` belum terbaca, cek lokasi binary global npm:
+Jika command `panzek-deploy` belum terbaca, cek lokasi binary global npm:
 
 ```bash
 npm bin -g
@@ -74,7 +74,7 @@ Pastikan hasil path tersebut sudah masuk ke `PATH` shell Anda.
 Jika terpasang global:
 
 ```bash
-panzek
+panzek-deploy
 ```
 
 Jika dijalankan dari folder source:
@@ -127,12 +127,6 @@ Yang dikerjakan:
 - create DNS route ke hostname publik
 - optional install dan start service `cloudflared`
 
-Contoh service lokal:
-
-- `http://localhost:80`
-- `http://127.0.0.1:8080`
-- `https://localhost:8443`
-
 ### 4. Update Project
 
 Flow ini dipakai untuk project yang sudah ada di server.
@@ -146,38 +140,6 @@ Yang dikerjakan:
 - jalankan `composer install`, `npm install`, dan `npm run build` bila relevan
 - untuk Laravel, lanjut `migrate`, `optimize:clear`, `optimize`, dan perbaikan permission
 
-## Tampilan dan UX
-
-CLI ini dibangun supaya lebih nyaman dipakai di terminal server:
-
-- panel info, sukses, dan error memakai warna border yang berbeda
-- summary card dibuat ringkas untuk data penting
-- daftar project update ditampilkan sebagai katalog
-- execution plan dibuat terpisah agar langkah yang akan berjalan terlihat sejak awal
-- hasil akhir workflow dibuat lebih tegas supaya operator cepat tahu outcome akhirnya
-
-## Error Handling
-
-Saat sebuah langkah gagal, CLI tidak memaksa Anda mengulang dari awal.
-
-Pilihan yang tersedia:
-
-- `Coba lagi`
-- `Batalkan workflow ini`
-- `Keluar aplikasi`
-- aksi kontekstual tambahan, misalnya edit koneksi admin DB saat setup database gagal
-
-Error card menampilkan:
-
-- tahap yang gagal
-- command yang dijalankan
-- folder kerja
-- exit code
-- fase workflow
-- potongan output terakhir
-- kemungkinan penyebab
-- langkah yang bisa dicoba
-
 ## Kebutuhan Umum
 
 - Node.js 18+
@@ -187,14 +149,10 @@ Error card menampilkan:
 - `php`
 - `mysql` atau `mariadb` client
 
-Untuk setup Nginx, Cloudflare service install, dan path sistem seperti `/var/www`, Anda biasanya juga butuh akses `sudo`.
+## Repository
 
-## Catatan Publikasi
+[https://github.com/darksoul729/panzek-deploy-cli](https://github.com/darksoul729/panzek-deploy-cli)
 
-Sebelum publish ke npm publik, lengkapi field berikut di `package.json` jika URL final sudah tersedia:
+## Lisensi
 
-- `repository`
-- `homepage`
-- `bugs`
-
-Field tersebut belum diisi otomatis karena source URL repository final belum tersedia di workspace ini.
+[MIT](./LICENSE)

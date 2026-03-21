@@ -1,11 +1,11 @@
 {
-  "name": "panzek-cli",
+  "name": "panzek-deploy-cli",
   "version": "1.0.0",
   "description": "Interactive Laravel deployment CLI with database and Nginx setup workflows",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "panzek": "./index.js"
+    "panzek-deploy": "index.js"
   },
   "files": [
     "index.js",
@@ -31,6 +31,14 @@
   "engines": {
     "node": ">=18"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darksoul729/panzek-deploy-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/darksoul729/panzek-deploy-cli/issues"
+  },
+  "homepage": "https://github.com/darksoul729/panzek-deploy-cli#readme",
   "publishConfig": {
     "access": "public"
   },

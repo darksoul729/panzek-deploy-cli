@@ -95,10 +95,17 @@ function renderBanner() {
   const ascii = `
 ██████╗  █████╗ ███╗   ██╗███████╗███████╗██╗  ██╗
 ██╔══██╗██╔══██╗████╗  ██║╚══███╔╝██╔════╝██║ ██╔╝
-██████╔╝███████║██╔██╗ ██║  ███╔╝ █████╗  █████╔╝
-██╔═══╝ ██╔══██║██║╚██╗██║ ███╔╝  ██╔══╝  ██╔═██╗
-██║     ██║  ██║██║ ╚████║███████╗███████╗██║  ██╗
-╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝
+██████╔╝███████║██╔██╗ ██║  ███╔╝ █████╗  █████╔╝ 
+██╔═══╝ ██╔══██║██║╚██╗██║ ███╔╝  ██╔══╝  ██╔═██╗ 
+██║     ██║  ██║██║ ╚████║███████╗███████╗██║  ██╗ 
+╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝ 
+
+██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
+██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
+██║  ██║█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ 
+██║  ██║██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  
+██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   
+╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝   
 `.trim();
 
   const body = [
@@ -109,7 +116,7 @@ function renderBanner() {
 
   console.log(
     boxen(body, {
-      title: chalk.hex('#ffd166')('Panzek CLI'),
+      title: chalk.hex('#ffd166')('Panzek Deploy CLI'),
       titleAlignment: 'center',
       borderStyle: 'round',
       borderColor: panelBorder,
@@ -665,7 +672,12 @@ function getProjectProfile(appPath) {
   }
 
   if (hasArtisan) {
-    postSteps.push('php artisan migrate --force', 'php artisan optimize:clear', 'php artisan optimize');
+    postSteps.push(
+      'php artisan storage:link',
+      'php artisan migrate --force',
+      'php artisan optimize:clear',
+      'php artisan optimize'
+    );
   }
 
   let category = 'Git Project';
@@ -985,23 +997,99 @@ function setEnvValue(envPath, key, value, dryRun = false) {
 async function applyLaravelPermissions(appPath, dryRun = false) {
   const storagePath = path.join(appPath, 'storage');
   const cachePath = path.join(appPath, 'bootstrap/cache');
+  const artisanPath = path.join(appPath, 'artisan');
+  const envPath = path.join(appPath, '.env');
   const username = os.userInfo().username;
   const groupName = resolveAppGroup(username);
 
-  const commands = [
-    `sudo chown -R ${username}:${groupName} "${appPath}"`,
-    `sudo chmod -R 775 "${storagePath}"`,
-    `sudo chmod -R 775 "${cachePath}"`
+  // Cross-check standard storage subdirectories (ensure they exist)
+  if (fs.existsSync(storagePath)) {
+    const storageSubdirs = [
+      'app/public',
+      'framework/cache/data',
+      'framework/sessions',
+      'framework/testing',
+      'framework/views',
+      'logs'
+    ];
+    for (const subdir of storageSubdirs) {
+      const fullPath = path.join(storagePath, subdir);
+      if (!fs.existsSync(fullPath)) {
+        if (!dryRun) {
+          try {
+            fs.mkdirSync(fullPath, { recursive: true });
+          } catch (e) {
+            // ignore errors here, chown/chmod will report if something is really wrong
+          }
+        } else {
+          log.info(chalk.yellow(`[dry-run] buat folder ${fullPath}`));
+        }
+      }
+    }
+  }
+
+  // Ensure bootstrap/cache exists if bootstrap exists
+  if (fs.existsSync(path.join(appPath, 'bootstrap')) && !fs.existsSync(cachePath)) {
+    if (!dryRun) {
+      try {
+        fs.mkdirSync(cachePath, { recursive: true });
+      } catch (e) {}
+    }
+  }
+
+  const permissionPlan = [
+    {
+      title: 'Mengatur ownership ke ' + username + ':' + groupName,
+      command: `sudo chown -R ${username}:${groupName} "${appPath}"`
+    },
+    {
+      title: 'Mengatur permission folder (755)',
+      command: `sudo find "${appPath}" -type d -exec chmod 755 {} +`
+    },
+    {
+      title: 'Mengatur permission file (644)',
+      command: `sudo find "${appPath}" -type f -exec chmod 644 {} +`
+    }
   ];
 
-  for (const cmd of commands) {
+  if (fs.existsSync(artisanPath)) {
+    permissionPlan.push({
+      title: 'Mengatur executable pada file artisan',
+      command: `sudo chmod +x "${artisanPath}"`
+    });
+  }
+
+  const writablePaths = [];
+  if (fs.existsSync(storagePath)) writablePaths.push(storagePath);
+  if (fs.existsSync(cachePath)) writablePaths.push(cachePath);
+
+  if (writablePaths.length > 0) {
+    const pathsStr = writablePaths.map(p => `"${p}"`).join(' ');
+    permissionPlan.push({
+      title: 'Mengatur write permission pada storage & cache (775)',
+      command: `sudo chmod -R 775 ${pathsStr}`
+    });
+    permissionPlan.push({
+      title: 'Mengatur sticky group agar folder baru otomatis punya group yang sama',
+      command: `sudo find ${pathsStr} -type d -exec chmod g+s {} +`
+    });
+  }
+
+  if (fs.existsSync(envPath)) {
+    permissionPlan.push({
+      title: 'Mengamankan file .env (640)',
+      command: `sudo chmod 640 "${envPath}"`
+    });
+  }
+
+  for (const step of permissionPlan) {
     const result = await runCommandWithHandling({
-      title: 'Mengatur Permission Laravel',
-      command: cmd,
+      title: 'Permission Laravel: ' + step.title,
+      command: step.command,
       cwd: appPath,
       dryRun,
       phase: 'permission',
-      message: 'Permission Laravel gagal diterapkan.'
+      message: `${step.title} gagal diterapkan.`
     });
     if (!result.ok) return false;
   }
@@ -2018,7 +2106,7 @@ async function updateGitProject(project, dryRun = false) {
     }
   }
 
-  if (project.profile.hasLaravelDirs) {
+  if (project.profile.hasArtisan || project.profile.hasLaravelDirs) {
     const permissionOk = await applyLaravelPermissions(appPath, dryRun);
     if (!permissionOk) {
       log.error('Permission Laravel belum berhasil diterapkan.');
@@ -2205,6 +2293,7 @@ async function deployLaravel() {
 
   const postSteps = [
     'php artisan key:generate',
+    'php artisan storage:link',
     'php artisan migrate --force',
     'php artisan optimize:clear',
     'php artisan optimize'
