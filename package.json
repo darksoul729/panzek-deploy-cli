@@ -1,6 +1,6 @@
 {
   "name": "panzek-deploy-cli",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Interactive Laravel deployment CLI with database and Nginx setup workflows",
   "type": "module",
   "main": "index.js",
@@ -9,6 +9,7 @@
   },
   "files": [
     "index.js",
+    "lib",
     "panzek.config.ci.example.json",
     "assets",
     "README.md",
