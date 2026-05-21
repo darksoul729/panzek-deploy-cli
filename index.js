@@ -9,25 +9,240 @@ import {
   outro,
   password as clackPassword,
   select as clackSelect,
-  spinner as createSpinner,
   text as clackText
 } from '@clack/prompts';
 import chalk from 'chalk';
 import boxen from 'boxen';
 import { execSync, spawnSync } from 'child_process';
-import Table from 'cli-table3';
 import fs from 'fs';
 import gradient from 'gradient-string';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { parseRuntimeOptions } from './lib/runtime-options.js';
+import {
+  validateDomain as validateDomainInput,
+  validateUrl as validateUrlInput,
+  validateCloudflareHostname as validateCloudflareHostnameInput,
+  validateTunnelName as validateTunnelNameInput
+} from './lib/cloudflare-validators.js';
+import { canOfferRetry } from './lib/retry-policy.js';
+import { setUiThemePreset, uiTheme, themePresets, resolveThemeName } from './lib/ui/theme.js';
+import {
+  renderPanel as uiRenderPanel,
+  renderSummary as uiRenderSummary,
+  renderSteps as uiRenderSteps,
+  renderProjectCatalog as uiRenderProjectCatalog,
+  renderWorkflowHeader as uiRenderWorkflowHeader,
+  statusBadge
+} from './lib/ui/renderer.js';
+import { createTaskSpinner } from './lib/ui/spinner.js';
 
 const brandGradient = gradient(['#ff7a18', '#ffb347', '#ffd166']);
-const panelBorder = '#f59e0b';
-const successBorder = '#22c55e';
-const errorBorder = '#ef4444';
-const infoBorder = '#38bdf8';
-const textMuted = '#94a3b8';
+let panelBorder = uiTheme.border.default;
+let successBorder = uiTheme.border.success;
+let errorBorder = uiTheme.border.error;
+let infoBorder = uiTheme.border.info;
+const EXIT_CODE_SUCCESS = 0;
+const EXIT_CODE_RUNTIME_ERROR = 1;
+const EXIT_CODE_VALIDATION_ERROR = 2;
+const EXIT_CODE_DEPENDENCY_ERROR = 3;
+const EXIT_CODE_ACTION_FAILED = 4;
+const sessionId = new Date().toISOString().replace(/[:.]/g, '-');
+let outputMode = 'table';
+
+function getSessionLogPath() {
+  return path.join(os.tmpdir(), 'panzek', 'logs', `panzek-${sessionId}.log`);
+}
+
+const sessionLogPath = getSessionLogPath();
+
+function ensureSessionLogReady() {
+  ensureDirSync(path.dirname(sessionLogPath));
+}
+
+function appendSessionLog(message) {
+  try {
+    ensureSessionLogReady();
+    fs.appendFileSync(sessionLogPath, `${new Date().toISOString()} ${maskSensitiveText(message)}\n`);
+  } catch {
+    // ignore log write failures to keep CLI workflow running
+  }
+}
+
+function writeExecutionReport() {
+  executionReport.finishedAt = new Date().toISOString();
+  executionReport.durationMs = new Date(executionReport.finishedAt).getTime() - new Date(executionReport.startedAt).getTime();
+
+  if (!runtimeOptions.reportJsonPath) {
+    return;
+  }
+
+  try {
+    ensureDirSync(path.dirname(runtimeOptions.reportJsonPath));
+    fs.writeFileSync(runtimeOptions.reportJsonPath, `${JSON.stringify(getSanitizedExecutionReport(), null, 2)}\n`);
+    appendSessionLog(`[report] wrote ${runtimeOptions.reportJsonPath}`);
+  } catch (error) {
+    appendSessionLog(`[report:error] ${error.message}`);
+  }
+}
+
+function maskSensitiveText(value) {
+  let text = String(value ?? '');
+  const masks = [
+    /(password\s*[:=]\s*)([^\s\n]+)/gi,
+    /(db_password\s*[:=]\s*)([^\s\n]+)/gi,
+    /(PANZEK_DB_PASSWORD\s*[:=]\s*)([^\s\n]+)/gi,
+    /(Authorization:\s*Bearer\s+)([^\s\n]+)/gi
+  ];
+
+  for (const pattern of masks) {
+    text = text.replace(pattern, (_, prefix) => `${prefix}***`);
+  }
+
+  return text;
+}
+
+function maskSecretValue(value) {
+  const raw = String(value || '');
+  if (!raw) return '';
+  if (raw.length <= 4) return '*'.repeat(raw.length);
+  return `${'*'.repeat(raw.length - 4)}${raw.slice(-4)}`;
+}
+
+function getSanitizedExecutionReport() {
+  const safe = { ...executionReport };
+  safe.error = maskSensitiveText(safe.error || '');
+  return safe;
+}
+
+function exitWith(code, reason = '') {
+  if (reason) {
+    appendSessionLog(`[exit] code=${code} reason=${reason}`);
+  } else {
+    appendSessionLog(`[exit] code=${code}`);
+  }
+  process.exit(code);
+}
+
+function renderHelp() {
+  const body = [
+    chalk.white('Panzek Deploy CLI'),
+    '',
+    chalk.gray('Pemakaian:'),
+    '  panzek-deploy [opsi]',
+    '',
+    chalk.gray('Opsi:'),
+    '  -h, --help                 Tampilkan bantuan',
+    '  -a, --action <nama>        Jalankan satu workflow langsung',
+    '                             Nilai: deploy-laravel | setup-nginx | setup-cloudflare | update-project | setup-server | fix-permissions | preflight',
+    '  --mode <normal|dry-run>    Tentukan mode eksekusi tanpa prompt mode',
+    '  --theme <amber|ocean|mono|auto> Preset warna tampilan CLI',
+    '  --preview-theme            Tampilkan pratinjau semua preset tema lalu keluar',
+    '  --output <table|json>      Format output ringkasan CLI',
+    '  --no-color                 Matikan warna output terminal',
+    '  --dry-run                  Jalankan semua workflow dalam mode pratinjau',
+    '  --max-retries <angka>      Batas retry per langkah gagal (default: 3)',
+    '  -y, --yes                  Auto-setuju semua prompt konfirmasi',
+    '  --non-interactive          Pakai nilai dari config/env tanpa prompt interaktif',
+    '  --config <path>            File config JSON (default: ./panzek.config.json)',
+    '  --report-json <path>       Simpan ringkasan hasil eksekusi ke JSON',
+    '  --no-banner                Sembunyikan banner',
+    '',
+    chalk.gray('Contoh:'),
+    '  panzek-deploy --action update-project --dry-run --yes',
+    '  panzek-deploy --action preflight --non-interactive',
+    '  panzek-deploy --action deploy-laravel --non-interactive --config ./panzek.config.json --report-json ./report.json',
+    '  panzek-deploy -a setup-nginx --yes'
+  ].join('\n');
+
+  renderPanel('Bantuan CLI', body, infoBorder);
+}
+
+function readJsonFileSafe(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch (error) {
+    throw new Error(`Config JSON tidak valid di ${filePath}: ${error.message}`);
+  }
+}
+
+function applyTheme(themeName) {
+  const resolved = resolveThemeName(themeName);
+  setUiThemePreset(resolved);
+  panelBorder = uiTheme.border.default;
+  successBorder = uiTheme.border.success;
+  errorBorder = uiTheme.border.error;
+  infoBorder = uiTheme.border.info;
+  runtimeOptions.theme = resolved;
+}
+
+function applyColorPolicy() {
+  const ciNoColor = Boolean(process.env.CI);
+  const forceNoColor = runtimeOptions.noColor || ciNoColor || parseBoolValue(getEnvValue('PANZEK_NO_COLOR', ''), false);
+  if (forceNoColor) {
+    process.env.NO_COLOR = '1';
+    process.env.FORCE_COLOR = '0';
+    chalk.level = 0;
+    runtimeOptions.noColor = true;
+  }
+}
+
+function previewThemes() {
+  for (const [name] of Object.entries(themePresets)) {
+    setUiThemePreset(name);
+    panelBorder = uiTheme.border.default;
+    successBorder = uiTheme.border.success;
+    errorBorder = uiTheme.border.error;
+    infoBorder = uiTheme.border.info;
+    renderSummary(`Theme: ${name}`, [
+      ['Border Default', uiTheme.border.default],
+      ['Border Info', uiTheme.border.info],
+      ['Text Accent', uiTheme.text.accent]
+    ], infoBorder);
+  }
+}
+
+function getEnvValue(name, fallback = '') {
+  const value = process.env[name];
+  return value === undefined || value === null || String(value).trim() === '' ? fallback : String(value).trim();
+}
+
+function parseBoolValue(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function getWorkflowConfig(action) {
+  const configWorkflow = runtimeConfig?.workflows?.[action] || {};
+  return typeof configWorkflow === 'object' && configWorkflow ? configWorkflow : {};
+}
+
+function requiredNonInteractive(action, label, value) {
+  if (String(value || '').trim() === '') {
+    throw new Error(`[non-interactive] ${label} wajib diisi untuk workflow ${action}.`);
+  }
+  return String(value).trim();
+}
+
+const executionReport = {
+  sessionId,
+  startedAt: new Date().toISOString(),
+  finishedAt: '',
+  durationMs: 0,
+  action: '',
+  mode: '',
+  success: false,
+  logPath: sessionLogPath,
+  error: ''
+};
 
 function formatModeLabel(dryRun) {
   return dryRun ? 'Pratinjau' : 'Jalankan langsung';
@@ -55,171 +270,152 @@ function shortenPath(targetPath, maxLength = 54) {
   return `...${input.slice(-(maxLength - 3))}`;
 }
 
-function getPanelAppearance(borderColor) {
-  if (borderColor === successBorder) {
-    return {
-      borderStyle: 'round',
-      titleColor: '#86efac',
-      padding: { top: 0, right: 1, bottom: 0, left: 1 },
-      margin: { top: 1, right: 0, bottom: 1, left: 0 }
-    };
+function renderBanner() {
+  const user = os.userInfo().username;
+  const host = os.hostname();
+  const pkg = 'panzek-deploy-cli';
+  const appVersion = '1.0.1';
+  const modeLabel = runtimeOptions?.dryRun ? 'dry-run' : 'normal';
+  const asciiLogo = `
+██████╗ ██████╗  ██████╗
+██╔══██╗██╔══██╗██╔════╝
+██████╔╝██║  ██║██║
+██╔═══╝ ██║  ██║██║
+██║     ██████╔╝╚██████╗
+╚═╝     ╚═════╝  ╚═════╝
+`.trim().split('\n');
+  const leftLines = [
+    ...asciiLogo.map((line) => brandGradient(line)),
+    '',
+    chalk.hex('#f8fafc')('Panzek Deploy CLI'),
+    chalk.hex('#86efac')(`${user}@${host}`),
+    chalk.hex('#94a3b8')('Deploy workflow toolkit'),
+    '',
+    chalk.hex('#fbbf24')('deploy-laravel'),
+    chalk.hex('#38bdf8')('setup-nginx'),
+    chalk.hex('#22d3ee')('setup-cloudflare'),
+    chalk.hex('#4ade80')('preflight-check')
+  ];
+  const infoLines = [
+    `${chalk.hex('#94a3b8')('package')} : ${chalk.white(pkg)} ${chalk.hex('#86efac')(appVersion)}`,
+    `${chalk.hex('#94a3b8')('node')}    : ${chalk.white(process.version)}`,
+    `${chalk.hex('#94a3b8')('os')}      : ${chalk.white(`${os.platform()} ${os.release()}`)}`,
+    `${chalk.hex('#94a3b8')('theme')}   : ${chalk.hex('#38bdf8')(runtimeOptions?.theme || 'amber')}`,
+    `${chalk.hex('#94a3b8')('output')}  : ${chalk.hex('#fbbf24')(outputMode)}`,
+    `${chalk.hex('#94a3b8')('mode')}    : ${chalk.hex('#22d3ee')(modeLabel)}`
+  ];
+  const swatches = [
+    chalk.bgBlack('   '),
+    chalk.bgRed('   '),
+    chalk.bgGreen('   '),
+    chalk.bgYellow('   '),
+    chalk.bgBlue('   '),
+    chalk.bgMagenta('   '),
+    chalk.bgCyan('   '),
+    chalk.bgWhite('   ')
+  ].join('');
+  infoLines.push('', swatches);
+  const leftWidth = Math.max(...leftLines.map((line) => stripAnsi(line).length));
+  const maxLines = Math.max(leftLines.length, infoLines.length);
+  const joined = [];
+  for (let i = 0; i < maxLines; i++) {
+    const left = leftLines[i] || '';
+    const right = infoLines[i] || '';
+    const padding = ' '.repeat(Math.max(2, leftWidth - stripAnsi(left).length + 4));
+    joined.push(`${left}${padding}${right}`);
   }
-
-  if (borderColor === errorBorder) {
-    return {
-      borderStyle: 'double',
-      titleColor: '#fca5a5',
-      padding: { top: 0, right: 1, bottom: 0, left: 1 },
-      margin: { top: 1, right: 0, bottom: 1, left: 0 }
-    };
-  }
-
-  if (borderColor === infoBorder) {
-    return {
-      borderStyle: 'round',
-      titleColor: '#7dd3fc',
-      padding: { top: 0, right: 1, bottom: 0, left: 1 },
-      margin: { top: 1, right: 0, bottom: 1, left: 0 }
-    };
-  }
-
-  return {
-    borderStyle: 'round',
-    titleColor: '#fcd34d',
-    padding: { top: 0, right: 1, bottom: 0, left: 1 },
-    margin: { top: 1, right: 0, bottom: 1, left: 0 }
-  };
+  const body = joined.join('\n');
+  const title = chalk.hex('#ffd166')('Panzek Deploy CLI / Fetch Style');
+  const rule = chalk.hex('#64748b')('─'.repeat(Math.min(78, Math.max(36, process.stdout.columns ? process.stdout.columns - 8 : 70))));
+  console.log(`${title}\n${rule}\n${body}\n${rule}\n`);
 }
 
-function renderBanner() {
-  const ascii = `
-██████╗  █████╗ ███╗   ██╗███████╗███████╗██╗  ██╗
-██╔══██╗██╔══██╗████╗  ██║╚══███╔╝██╔════╝██║ ██╔╝
-██████╔╝███████║██╔██╗ ██║  ███╔╝ █████╗  █████╔╝ 
-██╔═══╝ ██╔══██║██║╚██╗██║ ███╔╝  ██╔══╝  ██╔═██╗ 
-██║     ██║  ██║██║ ╚████║███████╗███████╗██║  ██╗ 
-╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝ 
-
-██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
-██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
-██║  ██║█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ 
-██║  ██║██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  
-██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   
-╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝   
-`.trim();
-
-  const body = [
-    brandGradient.multiline(ascii),
-    '',
-    chalk.gray('Deploy Laravel, siapkan database, atur Nginx, dan publish tunnel dari satu CLI.')
-  ].join('\n');
-
-  console.log(
-    boxen(body, {
-      title: chalk.hex('#ffd166')('Panzek Deploy CLI'),
-      titleAlignment: 'center',
-      borderStyle: 'round',
-      borderColor: panelBorder,
-      padding: { top: 0, right: 2, bottom: 0, left: 2 },
-      margin: { top: 0, right: 0, bottom: 2, left: 0 }
-    })
-  );
+function stripAnsi(value) {
+  return String(value ?? '').replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 function renderPanel(title, message, borderColor = panelBorder) {
-  const appearance = getPanelAppearance(borderColor);
-
-  console.log(
-    boxen(message, {
-      title: chalk.hex(appearance.titleColor).bold(title),
-      titleAlignment: 'left',
-      borderStyle: appearance.borderStyle,
-      borderColor,
-      padding: appearance.padding,
-      margin: appearance.margin
-    })
-  );
+  appendSessionLog(`[panel:${title}] ${stripAnsi(message)}`);
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'panel', title, message: stripAnsi(message), borderColor }));
+    return;
+  }
+  uiRenderPanel(title, message, borderColor);
 }
 
 function renderSummary(title, rows, borderColor = panelBorder) {
-  const table = new Table({
-    style: {
-      head: [],
-      border: ['gray'],
-      compact: true,
-      'padding-left': 1,
-      'padding-right': 1
-    },
-    chars: {
-      top: '',
-      'top-mid': '',
-      'top-left': '',
-      'top-right': '',
-      bottom: '',
-      'bottom-mid': '',
-      'bottom-left': '',
-      'bottom-right': '',
-      left: '',
-      'left-mid': '',
-      mid: '',
-      'mid-mid': '',
-      right: '',
-      'right-mid': '',
-      middle: '  '
-    }
-  });
-
-  for (const [label, value] of rows) {
-    table.push([chalk.hex(textMuted)(label), chalk.white(String(value))]);
+  if (outputMode === 'json') {
+    const entries = rows.map(([label, value]) => ({ label: stripAnsi(label), value: stripAnsi(value) }));
+    console.log(JSON.stringify({ type: 'summary', title, borderColor, rows: entries }));
+    return;
   }
-
-  renderPanel(title, table.toString(), borderColor);
+  uiRenderSummary(title, rows, borderColor);
 }
 
 function renderSteps(title, steps) {
-  const body = steps
-    .map((step, index) => `${chalk.hex('#fbbf24').bold(String(index + 1).padStart(2, '0'))}  ${chalk.white(step)}`)
-    .join('\n');
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'steps', title, steps }));
+    return;
+  }
+  uiRenderSteps(title, steps);
+}
 
-  renderPanel(title, body, infoBorder);
+function renderWorkflowHeader(title, metaRows = []) {
+  if (outputMode === 'json') {
+    const meta = metaRows.map(([label, value]) => ({ label: stripAnsi(label), value: stripAnsi(value) }));
+    console.log(JSON.stringify({ type: 'workflow', title: stripAnsi(title), meta }));
+    return;
+  }
+  uiRenderWorkflowHeader(title, metaRows);
 }
 
 function renderProjectCatalog(title, projects) {
-  const table = new Table({
-    head: [
-      chalk.gray('No'),
-      chalk.gray('Project'),
-      chalk.gray('Tipe'),
-      chalk.gray('Branch'),
-      chalk.gray('Status'),
-      chalk.gray('Path')
-    ],
-    style: {
-      head: [],
-      border: ['gray'],
-      compact: true
-    },
-    wordWrap: true,
-    colWidths: [4, 20, 12, 18, 18, 44]
-  });
-
-  projects.forEach((project, index) => {
-    table.push([
-      chalk.hex('#fbbf24').bold(String(index + 1).padStart(2, '0')),
-      chalk.white(project.name),
-      chalk.cyan(project.profile.category),
-      chalk.white(formatBranchLabel(project.branch)),
-      project.dirty ? chalk.hex('#fb7185')('Ada perubahan lokal') : chalk.hex('#4ade80')('Bersih'),
-      chalk.hex(textMuted)(shortenPath(project.path, 42))
-    ]);
-  });
-
-  renderPanel(title, table.toString(), infoBorder);
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'catalog', title, projects }));
+    return;
+  }
+  uiRenderProjectCatalog(title, projects, { formatBranchLabel, shortenPath });
 }
 
 function promptCancelled() {
-  clackCancel('Workflow dibatalkan.');
-  process.exit(0);
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'cancel', message: 'Workflow dibatalkan.' }));
+  } else {
+    clackCancel('Workflow dibatalkan.');
+  }
+  exitWith(EXIT_CODE_SUCCESS, 'prompt cancelled');
+}
+
+function logEvent(level, message) {
+  const text = String(message || '');
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'log', level, message: stripAnsi(text) }));
+    return;
+  }
+  if (level === 'info') log.info(text);
+  else if (level === 'warn') log.warn(text);
+  else if (level === 'error') log.error(text);
+  else if (level === 'success') log.success(text);
+  else if (level === 'step') log.step(text);
+  else console.log(text);
+}
+
+function renderNote(message, title = 'Catatan') {
+  const text = String(message || '');
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'note', title: stripAnsi(title), message: stripAnsi(text) }));
+    return;
+  }
+  note(text, title);
+}
+
+function renderOutro(message) {
+  const text = String(message || '');
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'outro', message: stripAnsi(text) }));
+    return;
+  }
+  outro(text);
 }
 
 function unwrapPrompt(value) {
@@ -262,6 +458,11 @@ async function askSelect({ message, options, initialValue }) {
 }
 
 async function askConfirm({ message, initialValue = true, active = 'Ya', inactive = 'Tidak' }) {
+  if (runtimeOptions.assumeYes) {
+    logEvent("info", chalk.yellow(`[auto-yes] ${message}`));
+    return true;
+  }
+
   return unwrapPrompt(
     await clackConfirm({
       message,
@@ -277,23 +478,7 @@ function validateRequired(label) {
 }
 
 function validateDomain(value) {
-  const input = String(value || '').trim();
-  const hostnameRegex = /^(?:\*\.)?(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/;
-  const ipv4Regex = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-
-  if (!input) {
-    return 'Domain wajib diisi';
-  }
-
-  if (/[\/\s]/.test(input)) {
-    return 'Domain tidak boleh mengandung spasi atau slash';
-  }
-
-  if (!hostnameRegex.test(input) && !ipv4Regex.test(input)) {
-    return 'Format domain tidak valid';
-  }
-
-  return undefined;
+  return validateDomainInput(value);
 }
 
 function validatePhpVersion(value) {
@@ -332,6 +517,10 @@ function validateLaravelAppPath(value) {
 
 function sanitizeFilename(value) {
   return String(value).replace(/[^a-zA-Z0-9.-]/g, '_');
+}
+
+function quoteShellArg(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 function replaceObject(target, source) {
@@ -429,11 +618,11 @@ function renderCommandErrorCard(result, context) {
   const lines = [
     chalk.red(context.message || 'Langkah ini belum berhasil dijalankan.'),
     '',
-    `${chalk.gray('Tahap')}      ${context.title}`,
-    `${chalk.gray('Command')}    ${result.command}`,
-    `${chalk.gray('Folder')}     ${result.cwd}`,
-    `${chalk.gray('Exit Code')}  ${result.code ?? '-'}`,
-    context.phase ? `${chalk.gray('Fase')}       ${context.phase}` : null
+    `Tahap      : ${context.title}`,
+    `Command    : ${result.command}`,
+    `Folder     : ${result.cwd}`,
+    `Exit Code  : ${result.code ?? '-'}`,
+    context.phase ? `Fase       : ${context.phase}` : null
   ].filter(Boolean);
 
   lines.push(
@@ -453,8 +642,14 @@ function renderCommandErrorCard(result, context) {
 }
 
 function executeCommand(command, cwd = process.cwd(), dryRun = false, options = {}) {
+  appendSessionLog(`[command:start] cwd="${cwd}" dryRun=${dryRun} interactive=${Boolean(options.interactive)} cmd=${command}`);
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({ type: 'command_start', command, cwd, dryRun, interactive: Boolean(options.interactive) }));
+  }
+
   if (dryRun) {
-    log.info(chalk.yellow(`[dry-run] (${cwd}) ${command}`));
+    logEvent("info", `[dry-run] (${cwd}) ${command}`);
+    appendSessionLog('[command:dry-run] skipped');
     return {
       ok: true,
       command,
@@ -467,8 +662,7 @@ function executeCommand(command, cwd = process.cwd(), dryRun = false, options = 
     };
   }
 
-  const spinner = createSpinner();
-  spinner.start(`Menjalankan: ${command}`);
+  const spinner = outputMode === 'json' ? null : createTaskSpinner(`Menjalankan: ${command}`);
 
   if (options.interactive) {
     try {
@@ -477,7 +671,8 @@ function executeCommand(command, cwd = process.cwd(), dryRun = false, options = 
         stdio: 'inherit',
         shell: true
       });
-      spinner.stop(chalk.green(`Berhasil: ${command}`));
+      if (spinner) spinner.stopSuccess(`Berhasil: ${command}`);
+      appendSessionLog('[command:done] status=0');
       return {
         ok: true,
         command,
@@ -489,7 +684,8 @@ function executeCommand(command, cwd = process.cwd(), dryRun = false, options = 
         dryRun: false
       };
     } catch (error) {
-      spinner.error(chalk.red(`Gagal: ${command}`));
+      if (spinner) spinner.stopError(`Gagal: ${command}`);
+      appendSessionLog(`[command:done] status=${error.status ?? 1} error=${error.message || ''}`);
       return {
         ok: false,
         command,
@@ -510,14 +706,24 @@ function executeCommand(command, cwd = process.cwd(), dryRun = false, options = 
     maxBuffer: 10 * 1024 * 1024
   });
 
-  spinner.clear();
+  if (spinner) spinner.clear();
 
   if (result.stdout) {
-    process.stdout.write(result.stdout);
+    if (outputMode === 'json') {
+      console.log(JSON.stringify({ type: 'command_stdout', command, cwd, output: result.stdout }));
+    } else {
+      process.stdout.write(result.stdout);
+    }
+    appendSessionLog(`[command:stdout]\n${result.stdout.replace(/\x1b\[[0-9;]*m/g, '')}`);
   }
 
   if (result.stderr) {
-    process.stderr.write(result.stderr);
+    if (outputMode === 'json') {
+      console.log(JSON.stringify({ type: 'command_stderr', command, cwd, output: result.stderr }));
+    } else {
+      process.stderr.write(result.stderr);
+    }
+    appendSessionLog(`[command:stderr]\n${result.stderr.replace(/\x1b\[[0-9;]*m/g, '')}`);
   }
 
   const commandResult = {
@@ -532,9 +738,21 @@ function executeCommand(command, cwd = process.cwd(), dryRun = false, options = 
   };
 
   if (commandResult.ok) {
-    spinner.stop(chalk.green(`Berhasil: ${command}`));
+    if (spinner) spinner.stopSuccess(`Berhasil: ${command}`);
+    appendSessionLog('[command:done] status=0');
   } else {
-    spinner.error(chalk.red(`Gagal: ${command}`));
+    if (spinner) spinner.stopError(`Gagal: ${command}`);
+    appendSessionLog(`[command:done] status=${commandResult.code} error=${commandResult.errorMessage || ''}`);
+  }
+  if (outputMode === 'json') {
+    console.log(JSON.stringify({
+      type: 'command_done',
+      command,
+      cwd,
+      ok: commandResult.ok,
+      code: commandResult.code,
+      errorMessage: commandResult.errorMessage || ''
+    }));
   }
 
   return commandResult;
@@ -550,11 +768,21 @@ async function runCommandWithHandling({
   extraActions = [],
   interactive = false
 }) {
+  let retryCount = 0;
+
   while (true) {
     const resolvedCommand = typeof command === 'function' ? command() : command;
     const result = executeCommand(resolvedCommand, cwd, dryRun, { interactive });
 
     if (result.ok) {
+      return result;
+    }
+
+    if (!canOfferRetry({
+      nonInteractive: runtimeOptions.nonInteractive,
+      retryCount,
+      maxRetries: runtimeOptions.maxRetries
+    })) {
       return result;
     }
 
@@ -568,7 +796,7 @@ async function runCommandWithHandling({
       message: 'Pilih tindakan untuk langkah ini',
       initialValue: 'retry',
       options: [
-        { value: 'retry', label: 'Coba lagi', hint: 'ulang langkah ini' },
+        { value: 'retry', label: 'Coba lagi', hint: `ulang langkah ini (${retryCount + 1}/${runtimeOptions.maxRetries})` },
         ...extraActions.map((action) => ({
           value: action.value,
           label: action.label,
@@ -580,6 +808,7 @@ async function runCommandWithHandling({
     });
 
     if (action === 'retry') {
+      retryCount += 1;
       continue;
     }
 
@@ -590,8 +819,8 @@ async function runCommandWithHandling({
     }
 
     if (action === 'exit') {
-      outro('Sampai jumpa.');
-      process.exit(1);
+      renderOutro('Sampai jumpa.');
+      exitWith(EXIT_CODE_ACTION_FAILED, 'user chose exit after failed step');
     }
 
     return result;
@@ -600,11 +829,338 @@ async function runCommandWithHandling({
 
 function commandExists(command) {
   try {
-    execSync(`command -v ${command}`, { stdio: 'ignore', shell: true });
+    execSync(`command -v ${quoteShellArg(command)}`, { stdio: 'ignore', shell: true });
     return true;
   } catch {
     return false;
   }
+}
+
+function detectLinuxPackageManager() {
+  if (commandExists('apt-get')) return 'apt';
+  if (commandExists('dnf')) return 'dnf';
+  if (commandExists('yum')) return 'yum';
+  if (commandExists('apk')) return 'apk';
+  if (commandExists('pacman')) return 'pacman';
+  return '';
+}
+
+function getServerDependencyCatalog() {
+  return [
+    {
+      key: 'git',
+      label: 'Git',
+      command: 'git',
+      packages: { apt: ['git'], dnf: ['git'], yum: ['git'], apk: ['git'], pacman: ['git'] }
+    },
+    {
+      key: 'curl',
+      label: 'cURL',
+      command: 'curl',
+      packages: { apt: ['curl'], dnf: ['curl'], yum: ['curl'], apk: ['curl'], pacman: ['curl'] }
+    },
+    {
+      key: 'unzip',
+      label: 'Unzip',
+      command: 'unzip',
+      packages: { apt: ['unzip'], dnf: ['unzip'], yum: ['unzip'], apk: ['unzip'], pacman: ['unzip'] }
+    },
+    {
+      key: 'nginx',
+      label: 'Nginx',
+      command: 'nginx',
+      packages: { apt: ['nginx'], dnf: ['nginx'], yum: ['nginx'], apk: ['nginx'], pacman: ['nginx'] }
+    },
+    {
+      key: 'php',
+      label: 'PHP CLI',
+      command: 'php',
+      packages: { apt: ['php'], dnf: ['php'], yum: ['php'], apk: ['php'], pacman: ['php'] }
+    },
+    {
+      key: 'php-fpm',
+      label: 'PHP-FPM',
+      command: 'php-fpm8.3',
+      packages: { apt: ['php8.3-fpm', 'php-fpm'], dnf: ['php-fpm'], yum: ['php-fpm'], apk: ['php-fpm'], pacman: ['php-fpm'] }
+    },
+    {
+      key: 'php-mysql',
+      label: 'PHP MySQL Extension',
+      command: 'php',
+      packages: { apt: ['php8.3-mysql', 'php-mysql'], dnf: ['php-mysqlnd'], yum: ['php-mysqlnd'], apk: ['php-mysqli'], pacman: ['php'] }
+    },
+    {
+      key: 'composer',
+      label: 'Composer',
+      command: 'composer',
+      packages: { apt: ['composer'], dnf: ['composer'], yum: ['composer'], apk: ['composer'], pacman: ['composer'] }
+    },
+    {
+      key: 'node',
+      label: 'Node.js',
+      command: 'node',
+      packages: { apt: ['nodejs'], dnf: ['nodejs'], yum: ['nodejs'], apk: ['nodejs'], pacman: ['nodejs'] }
+    },
+    {
+      key: 'npm',
+      label: 'npm',
+      command: 'npm',
+      packages: { apt: ['npm'], dnf: ['npm'], yum: ['npm'], apk: ['npm'], pacman: ['npm'] }
+    },
+    {
+      key: 'mysql-client',
+      label: 'MySQL/MariaDB Client',
+      command: 'mysql',
+      packages: {
+        apt: ['default-mysql-client', 'mariadb-client'],
+        dnf: ['mariadb'],
+        yum: ['mariadb'],
+        apk: ['mariadb-client'],
+        pacman: ['mariadb-clients']
+      }
+    },
+    {
+      key: 'cloudflared',
+      label: 'Cloudflared (Opsional)',
+      command: 'cloudflared',
+      packages: { apt: ['cloudflared'], dnf: ['cloudflared'], yum: ['cloudflared'], apk: ['cloudflared'], pacman: ['cloudflared'] },
+      optional: true
+    }
+  ];
+}
+
+function checkServerDependencies() {
+  const catalog = getServerDependencyCatalog();
+
+  return catalog.map((item) => {
+    let installed = commandExists(item.command);
+
+    if (item.key === 'php-mysql' && commandExists('php')) {
+      const modules = readCommandOutput('php -m');
+      installed = /pdo_mysql|mysqli/i.test(modules);
+    }
+
+    if (item.key === 'php-fpm' && !installed && commandExists('php-fpm')) {
+      installed = true;
+    }
+
+    return {
+      ...item,
+      installed
+    };
+  });
+}
+
+async function installSystemPackages(packageManager, packages, dryRun = false) {
+  const unique = [...new Set(packages.filter(Boolean))];
+  if (unique.length === 0) return true;
+
+  let result;
+  if (packageManager === 'apt') {
+    result = await runCommandWithHandling({
+      title: 'Update Apt Index',
+      command: 'sudo apt-get update',
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Gagal update apt index.'
+    });
+    if (!result.ok) return false;
+
+    result = await runCommandWithHandling({
+      title: 'Install Dependency Server',
+      command: `sudo apt-get install -y ${unique.map(quoteShellArg).join(' ')}`,
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Install dependency server gagal.'
+    });
+  } else if (packageManager === 'dnf') {
+    result = await runCommandWithHandling({
+      title: 'Install Dependency Server',
+      command: `sudo dnf install -y ${unique.map(quoteShellArg).join(' ')}`,
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Install dependency server gagal.'
+    });
+  } else if (packageManager === 'yum') {
+    result = await runCommandWithHandling({
+      title: 'Install Dependency Server',
+      command: `sudo yum install -y ${unique.map(quoteShellArg).join(' ')}`,
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Install dependency server gagal.'
+    });
+  } else if (packageManager === 'apk') {
+    result = await runCommandWithHandling({
+      title: 'Update Apk Index',
+      command: 'sudo apk update',
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Gagal update apk index.'
+    });
+    if (!result.ok) return false;
+    result = await runCommandWithHandling({
+      title: 'Install Dependency Server',
+      command: `sudo apk add ${unique.map(quoteShellArg).join(' ')}`,
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Install dependency server gagal.'
+    });
+  } else if (packageManager === 'pacman') {
+    result = await runCommandWithHandling({
+      title: 'Install Dependency Server',
+      command: `sudo pacman -Sy --noconfirm ${unique.map(quoteShellArg).join(' ')}`,
+      cwd: process.cwd(),
+      dryRun,
+      phase: 'bootstrap',
+      message: 'Install dependency server gagal.'
+    });
+  } else {
+    return false;
+  }
+
+  return result.ok;
+}
+
+async function setupServerDependencies() {
+  const mode = await askRunMode();
+  const dryRun = mode === 'dry-run';
+  const packageManager = detectLinuxPackageManager();
+
+  if (!packageManager) {
+    renderPanel(
+      'OS Belum Didukung Otomatis',
+      'Installer otomatis belum mendeteksi package manager yang didukung (apt/dnf/yum/apk/pacman).',
+      errorBorder
+    );
+    return false;
+  }
+
+  const checks = checkServerDependencies();
+  const missing = checks.filter((item) => !item.installed && !item.optional);
+  const missingOptional = checks.filter((item) => !item.installed && item.optional);
+
+  renderSummary('Preflight Dependency Server', [
+    ['Package Manager', packageManager],
+    ['Terpasang', checks.filter((item) => item.installed).length],
+    ['Wajib Belum Ada', missing.length],
+    ['Opsional Belum Ada', missingOptional.length],
+    ['Mode', formatModeLabel(dryRun)]
+  ], infoBorder);
+
+  renderSteps(
+    'Dependency Wajib',
+    checks
+      .filter((item) => !item.optional)
+      .map((item) => `${item.label}: ${item.installed ? 'sudah terinstall' : 'belum terinstall'}`)
+  );
+
+  const includeOptional = runtimeOptions.nonInteractive
+    ? parseBoolValue(getEnvValue('PANZEK_SETUP_SERVER_INCLUDE_OPTIONAL', ''), false)
+    : await askConfirm({
+        message: 'Install juga dependency opsional (cloudflared) jika belum ada?',
+        initialValue: false
+      });
+
+  const packages = [];
+  for (const item of missing) packages.push(...(item.packages?.[packageManager] || []));
+  if (includeOptional) {
+    for (const item of missingOptional) packages.push(...(item.packages?.[packageManager] || []));
+  }
+
+  if (packages.length === 0) {
+    renderPanel('Server Sudah Siap', 'Semua dependency utama sudah tersedia.', successBorder);
+    return true;
+  }
+
+  renderSummary('Rencana Install Dependency', [
+    ['Total Package Kandidat', [...new Set(packages)].length],
+    ['Daftar', [...new Set(packages)].join(', ')]
+  ], infoBorder);
+
+  const confirmed = runtimeOptions.nonInteractive
+    ? true
+    : await askConfirm({
+        message: 'Lanjut install dependency server?',
+        initialValue: true
+      });
+
+  if (!confirmed) {
+    logEvent("warn", 'Bootstrap server dibatalkan.');
+    return false;
+  }
+
+  const ok = await installSystemPackages(packageManager, packages, dryRun);
+  if (!ok) return false;
+
+  if (dryRun) {
+    renderPanel(
+      'Pratinjau Bootstrap Server Selesai',
+      'Semua command install berhasil dipetakan. Jalankan tanpa dry-run untuk eksekusi nyata.',
+      successBorder
+    );
+    return true;
+  }
+
+  const postChecks = checkServerDependencies();
+  const remaining = postChecks.filter((item) => !item.installed && !item.optional);
+
+  renderSummary('Hasil Bootstrap Server', [
+    ['Dependency Wajib Belum Ada', remaining.length],
+    ['Cloudflared', commandExists('cloudflared') ? 'Tersedia' : 'Belum tersedia']
+  ], remaining.length === 0 ? successBorder : errorBorder);
+
+  return remaining.length === 0;
+}
+
+function checkSudoNonInteractiveAccess() {
+  const result = spawnSync('sudo -n true', {
+    shell: true,
+    encoding: 'utf-8'
+  });
+  return result.status === 0;
+}
+
+async function runPreflight() {
+  renderWorkflowHeader('Preflight Check', [['Mode', runtimeOptions.dryRun ? 'Pratinjau' : 'Normal']]);
+  const packageManager = detectLinuxPackageManager();
+  const checks = checkServerDependencies();
+  const missingRequired = checks.filter((item) => !item.optional && !item.installed);
+  const missingOptional = checks.filter((item) => item.optional && !item.installed);
+  const sudoReady = checkSudoNonInteractiveAccess();
+  const configExists = fs.existsSync(runtimeOptions.configPath);
+
+  renderSummary('Preflight Ringkas', [
+    ['Status', missingRequired.length === 0 ? statusBadge('success', 'READY') : statusBadge('warn', 'NEEDS ATTENTION')],
+    ['Config Path', runtimeOptions.configPath],
+    ['Config Ada', formatYesNo(configExists)],
+    ['Package Manager', packageManager || 'Tidak terdeteksi'],
+    ['Sudo Non-Interactive', sudoReady ? 'Siap' : 'Belum siap'],
+    ['Dependency Wajib Hilang', String(missingRequired.length)],
+    ['Dependency Opsional Hilang', String(missingOptional.length)]
+  ], missingRequired.length === 0 ? successBorder : errorBorder);
+
+  renderSteps(
+    'Dependency Wajib',
+    checks
+      .filter((item) => !item.optional)
+      .map((item) => `${item.label}: ${item.installed ? 'sudah terinstall' : 'belum terinstall'}`)
+  );
+
+  if (missingOptional.length > 0) {
+    renderSteps('Dependency Opsional', missingOptional.map((item) => `${item.label}: belum terinstall`));
+  }
+
+  if (!sudoReady) {
+    renderNote('Sebagian workflow butuh sudo. Jalankan dengan user yang punya akses sudo tanpa hambatan policy.', 'Catatan Sudo');
+  }
+
+  return missingRequired.length === 0;
 }
 
 function readCommandOutput(command, cwd = process.cwd()) {
@@ -703,8 +1259,11 @@ function getProjectProfile(appPath) {
 }
 
 function getGitProjectInfo(appPath) {
-  const profile = getProjectProfile(appPath);
+  if (!fs.existsSync(path.join(appPath, '.git'))) {
+    return null;
+  }
 
+  const profile = getProjectProfile(appPath);
   if (!profile.hasGit) {
     return null;
   }
@@ -840,7 +1399,7 @@ async function ensureAppOwnership(appPath, dryRun = false) {
   const groupName = resolveAppGroup(username);
   const result = await runCommandWithHandling({
     title: 'Mengatur Ownership Folder',
-    command: `sudo chown -R ${username}:${groupName} "${appPath}"`,
+    command: `sudo chown -R ${quoteShellArg(`${username}:${groupName}`)} ${quoteShellArg(appPath)}`,
     cwd: process.cwd(),
     dryRun,
     phase: 'filesystem',
@@ -871,8 +1430,8 @@ async function ensureGitRepo(repo, branch, targetDir, dryRun = false) {
     }
 
     const cloneCommand = pathNeedsSudo(resolvedTarget)
-      ? `sudo git clone -b ${branch} ${repo} "${resolvedTarget}"`
-      : `git clone -b ${branch} ${repo} "${resolvedTarget}"`;
+      ? `sudo git clone -b ${quoteShellArg(branch)} ${quoteShellArg(repo)} ${quoteShellArg(resolvedTarget)}`
+      : `git clone -b ${quoteShellArg(branch)} ${quoteShellArg(repo)} ${quoteShellArg(resolvedTarget)}`;
 
     const cloneResult = await runCommandWithHandling({
       title: 'Clone Repository',
@@ -892,7 +1451,7 @@ async function ensureGitRepo(repo, branch, targetDir, dryRun = false) {
   }
 
   if (!fs.existsSync(path.join(resolvedTarget, '.git'))) {
-    log.error(`Folder target ada tapi bukan repository git: ${resolvedTarget}`);
+    logEvent("error", `Folder target ada tapi bukan repository git: ${resolvedTarget}`);
     return { ok: false, cwd: resolvedTarget };
   }
 
@@ -911,7 +1470,7 @@ async function ensureGitRepo(repo, branch, targetDir, dryRun = false) {
 
   result = await runCommandWithHandling({
     title: 'Checkout Branch',
-    command: `git checkout ${branch}`,
+    command: `git checkout ${quoteShellArg(branch)}`,
     cwd: resolvedTarget,
     dryRun: false,
     phase: 'repository',
@@ -921,7 +1480,7 @@ async function ensureGitRepo(repo, branch, targetDir, dryRun = false) {
 
   result = await runCommandWithHandling({
     title: 'Pull Repository',
-    command: `git pull origin ${branch}`,
+    command: `git pull origin ${quoteShellArg(branch)}`,
     cwd: resolvedTarget,
     dryRun: false,
     phase: 'repository',
@@ -937,14 +1496,14 @@ function prepareLaravelEnv(appPath, dryRun = false) {
   const exampleEnvPath = path.join(appPath, '.env.example');
 
   if (dryRun) {
-    log.info(chalk.yellow(`[dry-run] cek/generate .env di ${envPath}`));
+    logEvent("info", chalk.yellow(`[dry-run] cek/generate .env di ${envPath}`));
     return true;
   }
 
   try {
     if (!fs.existsSync(envPath) && fs.existsSync(exampleEnvPath)) {
       fs.copyFileSync(exampleEnvPath, envPath);
-      log.success('.env dibuat dari .env.example');
+      logEvent("success", '.env dibuat dari .env.example');
     }
   } catch (error) {
     renderPanel(
@@ -960,7 +1519,7 @@ function prepareLaravelEnv(appPath, dryRun = false) {
 
 function setEnvValue(envPath, key, value, dryRun = false) {
   if (dryRun) {
-    log.info(chalk.yellow(`[dry-run] set ${key}="${value}" di ${envPath}`));
+    logEvent("info", chalk.yellow(`[dry-run] set ${key}="${value}" di ${envPath}`));
     return true;
   }
 
@@ -1022,7 +1581,7 @@ async function applyLaravelPermissions(appPath, dryRun = false) {
             // ignore errors here, chown/chmod will report if something is really wrong
           }
         } else {
-          log.info(chalk.yellow(`[dry-run] buat folder ${fullPath}`));
+          logEvent("info", chalk.yellow(`[dry-run] buat folder ${fullPath}`));
         }
       }
     }
@@ -1097,6 +1656,74 @@ async function applyLaravelPermissions(appPath, dryRun = false) {
   return true;
 }
 
+async function runLaravelHealthCheck(appPath, dryRun = false) {
+  const workflowConfig = getWorkflowConfig('deploy-laravel');
+  const targetUrl = getEnvValue('PANZEK_HEALTH_URL', workflowConfig.healthUrl || '');
+  const checks = [
+    { title: 'Cek PHP CLI', command: 'php -v', phase: 'health' },
+    { title: 'Cek Artisan', command: 'php artisan --version', phase: 'health' },
+    { title: 'Cek Nginx Config', command: 'sudo nginx -t', phase: 'health' }
+  ];
+
+  if (targetUrl) {
+    checks.push({
+      title: 'Cek HTTP Endpoint',
+      command: `curl -I -sS --max-time 12 ${quoteShellArg(targetUrl)}`,
+      phase: 'health'
+    });
+  }
+
+  for (const step of checks) {
+    const result = await runCommandWithHandling({
+      title: step.title,
+      command: step.command,
+      cwd: appPath,
+      dryRun,
+      phase: step.phase,
+      message: `${step.title} gagal.`
+    });
+    if (!result.ok) return false;
+  }
+
+  renderPanel('Health Check Selesai', 'Pemeriksaan utama deploy berhasil dijalankan.', successBorder);
+  return true;
+}
+
+async function fixPermissionsWorkflow() {
+  const mode = await askRunMode();
+  const dryRun = mode === 'dry-run';
+  renderWorkflowHeader('Fix Permissions', [['Mode', formatModeLabel(dryRun)]]);
+  const workflowConfig = getWorkflowConfig('fix-permissions');
+  const appPathInput = runtimeOptions.nonInteractive
+    ? requiredNonInteractive(
+        'fix-permissions',
+        'appPath',
+        getEnvValue('PANZEK_FIX_PERMISSIONS_PATH', workflowConfig.appPath || '')
+      )
+    : await askText({
+        message: 'Path project Laravel untuk normalisasi permission',
+        initialValue: '/var/www/laravel-app',
+        validate: validateLaravelAppPath
+      });
+  const appPath = path.resolve(appPathInput);
+
+  renderSummary('Fix Permissions', [
+    ['Status', statusBadge('info', 'IN PROGRESS')],
+    ['Path App', appPath],
+    ['Mode', formatModeLabel(dryRun)]
+  ], infoBorder);
+
+  const confirmed = runtimeOptions.nonInteractive
+    ? true
+    : await askConfirm({
+        message: 'Lanjut normalisasi permission Laravel?',
+        initialValue: true
+      });
+  if (!confirmed) return false;
+
+  return applyLaravelPermissions(appPath, dryRun);
+}
+
 function getLaravelDefaultSteps() {
   return [
     'composer install --no-dev --optimize-autoloader',
@@ -1138,50 +1765,15 @@ function getDefaultCloudflaredConfigPath(tunnelName) {
 }
 
 function validateTunnelName(value) {
-  const input = String(value || '').trim();
-
-  if (!input) {
-    return 'Nama tunnel wajib diisi';
-  }
-
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(input)) {
-    return 'Nama tunnel hanya boleh berisi huruf, angka, titik, underscore, atau dash';
-  }
-
-  return undefined;
+  return validateTunnelNameInput(value);
 }
 
 function validateUrl(value, label = 'URL') {
-  const input = String(value || '').trim();
-
-  if (!input) {
-    return `${label} wajib diisi`;
-  }
-
-  try {
-    const parsed = new URL(input);
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return `${label} harus memakai http:// atau https://`;
-    }
-  } catch {
-    return `${label} tidak valid`;
-  }
-
-  return undefined;
+  return validateUrlInput(value, label);
 }
 
 function validateCloudflareHostname(value) {
-  const domainValidation = validateDomain(value);
-  if (domainValidation) {
-    return domainValidation;
-  }
-
-  const input = String(value || '').trim();
-  if (!input.includes('.')) {
-    return 'Hostname publik harus berupa subdomain atau domain penuh';
-  }
-
-  return undefined;
+  return validateCloudflareHostnameInput(value);
 }
 
 function parseTunnelCreateResult(result) {
@@ -1316,7 +1908,7 @@ async function createMysqlDatabaseAndUser({ dbName, dbUser, dbPassword, dbHost, 
 
   try {
     if (!mysqlClient) {
-      log.error('mysql/mariadb client belum terinstall.');
+      logEvent("error", 'mysql/mariadb client belum terinstall.');
       return false;
     }
 
@@ -1527,7 +2119,7 @@ async function setupNginxConfig({ domain, appPath, phpVersion }, dryRun = false)
     fs.writeFileSync(tempPath, configContent);
     rollbackState = getNginxRollbackState(availablePath, enabledPath, tempDir);
   } catch (error) {
-    log.error(`Gagal membuat file config sementara: ${error.message}`);
+    logEvent("error", `Gagal membuat file config sementara: ${error.message}`);
     fs.rmSync(tempDir, { recursive: true, force: true });
     return false;
   }
@@ -1579,7 +2171,7 @@ async function setupNginxConfig({ domain, appPath, phpVersion }, dryRun = false)
       return false;
     }
 
-    log.success(`Config Nginx aktif di ${availablePath}`);
+    logEvent("success", `Config Nginx aktif di ${availablePath}`);
     return true;
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1587,6 +2179,16 @@ async function setupNginxConfig({ domain, appPath, phpVersion }, dryRun = false)
 }
 
 async function askRunMode() {
+  if (runtimeOptions.mode === 'dry-run' || runtimeOptions.dryRun) {
+    return 'dry-run';
+  }
+  if (runtimeOptions.mode === 'normal') {
+    return 'normal';
+  }
+  if (runtimeOptions.nonInteractive) {
+    return 'normal';
+  }
+
   return askSelect({
     message: 'Pilih mode eksekusi',
     initialValue: 'normal',
@@ -1630,7 +2232,7 @@ async function askUseDefaultSteps(defaultSteps) {
   }
 
   const steps = [];
-  log.info('Masukkan langkah custom. Kosongkan input untuk selesai.');
+  logEvent("info", 'Masukkan langkah custom. Kosongkan input untuk selesai.');
 
   while (true) {
     const step = await askText({
@@ -1728,6 +2330,53 @@ async function askNginxInfo(defaultAppPath = '/var/www/laravel-app') {
 }
 
 async function askCloudflareTunnelInfo() {
+  if (runtimeOptions.nonInteractive) {
+    const workflowConfig = getWorkflowConfig('setup-cloudflare');
+    const tunnelName = requiredNonInteractive(
+      'setup-cloudflare',
+      'tunnelName',
+      getEnvValue('PANZEK_CF_TUNNEL_NAME', workflowConfig.tunnelName || '')
+    );
+    const hostname = requiredNonInteractive(
+      'setup-cloudflare',
+      'hostname',
+      getEnvValue('PANZEK_CF_HOSTNAME', workflowConfig.hostname || '')
+    );
+    const serviceUrl = requiredNonInteractive(
+      'setup-cloudflare',
+      'serviceUrl',
+      getEnvValue('PANZEK_CF_SERVICE_URL', workflowConfig.serviceUrl || 'http://localhost:80')
+    );
+    const tunnelNameValidation = validateTunnelName(tunnelName);
+    if (tunnelNameValidation) {
+      throw new Error(`[non-interactive] tunnelName tidak valid: ${tunnelNameValidation}`);
+    }
+    const hostnameValidation = validateCloudflareHostname(hostname);
+    if (hostnameValidation) {
+      throw new Error(`[non-interactive] hostname tidak valid: ${hostnameValidation}`);
+    }
+    const serviceUrlValidation = validateUrl(serviceUrl, 'URL service lokal');
+    if (serviceUrlValidation) {
+      throw new Error(`[non-interactive] serviceUrl tidak valid: ${serviceUrlValidation}`);
+    }
+    return {
+      tunnelName,
+      hostname,
+      serviceUrl,
+      configPath: path.resolve(
+        getEnvValue('PANZEK_CF_CONFIG_PATH', workflowConfig.configPath || getDefaultCloudflaredConfigPath(tunnelName))
+      ),
+      installService: parseBoolValue(
+        getEnvValue('PANZEK_CF_INSTALL_SERVICE', workflowConfig.installService),
+        Boolean(workflowConfig.installService)
+      ),
+      runLogin: parseBoolValue(
+        getEnvValue('PANZEK_CF_RUN_LOGIN', workflowConfig.runLogin),
+        Boolean(workflowConfig.runLogin)
+      )
+    };
+  }
+
   const tunnelName = await askText({
     message: 'Nama tunnel Cloudflare',
     initialValue: 'panzek-tunnel',
@@ -1813,7 +2462,7 @@ async function createCloudflareTunnel(info, dryRun = false) {
 
   const result = await runCommandWithHandling({
     title: 'Membuat Tunnel Cloudflare',
-    command: `cloudflared tunnel create ${info.tunnelName}`,
+    command: `cloudflared tunnel create ${quoteShellArg(info.tunnelName)}`,
     cwd: process.cwd(),
     dryRun: false,
     phase: 'cloudflare',
@@ -1898,13 +2547,14 @@ function writeCloudflaredConfig(info, tunnelData, dryRun = false) {
 }
 
 async function setupCloudflareTunnel(dryRun = false) {
+  renderWorkflowHeader('Setup Cloudflare Tunnel', [['Mode', formatModeLabel(dryRun)]]);
   if (!commandExists('cloudflared')) {
     renderPanel(
       'Dependency Belum Tersedia',
       'cloudflared belum terinstall. Install cloudflared terlebih dahulu sebelum membuat Cloudflare Tunnel.',
       errorBorder
     );
-    return;
+    return false;
   }
 
   const info = await askCloudflareTunnelInfo();
@@ -1919,34 +2569,36 @@ async function setupCloudflareTunnel(dryRun = false) {
     ['Mode', formatModeLabel(dryRun)]
   ]);
 
-  const confirmed = await askConfirm({
-    message: 'Lanjut setup Cloudflare Tunnel?',
-    initialValue: true
-  });
+  const confirmed = runtimeOptions.nonInteractive
+    ? true
+    : await askConfirm({
+        message: 'Lanjut setup Cloudflare Tunnel?',
+        initialValue: true
+      });
 
   if (!confirmed) {
-    log.warn('Setup Cloudflare Tunnel dibatalkan.');
-    return;
+    logEvent("warn", 'Setup Cloudflare Tunnel dibatalkan.');
+    return false;
   }
 
   if (info.runLogin) {
     const loginOk = await ensureCloudflaredLogin(dryRun);
     if (!loginOk) {
-      log.error('Login Cloudflare Tunnel gagal.');
-      return;
+      logEvent("error", 'Login Cloudflare Tunnel gagal.');
+      return false;
     }
   }
 
   const tunnelData = await createCloudflareTunnel(info, dryRun);
   if (!tunnelData.ok) {
-    log.error('Cloudflare Tunnel tidak berhasil dibuat.');
-    return;
+    logEvent("error", 'Cloudflare Tunnel tidak berhasil dibuat.');
+    return false;
   }
 
   const configOk = writeCloudflaredConfig(info, tunnelData, dryRun);
   if (!configOk) {
-    log.error('Config cloudflared tidak berhasil ditulis.');
-    return;
+    logEvent("error", 'Config cloudflared tidak berhasil ditulis.');
+    return false;
   }
 
   const validateOk = await runCommandWithHandling({
@@ -1959,13 +2611,13 @@ async function setupCloudflareTunnel(dryRun = false) {
   });
 
   if (!validateOk.ok) {
-    log.error('Validasi ingress cloudflared gagal.');
-    return;
+    logEvent("error", 'Validasi ingress cloudflared gagal.');
+    return false;
   }
 
   const dnsOk = await runCommandWithHandling({
     title: 'Membuat DNS Route Tunnel',
-    command: `cloudflared tunnel route dns ${tunnelData.tunnelId} ${info.hostname}`,
+    command: `cloudflared tunnel route dns ${quoteShellArg(tunnelData.tunnelId)} ${quoteShellArg(info.hostname)}`,
     cwd: process.cwd(),
     dryRun,
     phase: 'cloudflare',
@@ -1973,8 +2625,8 @@ async function setupCloudflareTunnel(dryRun = false) {
   });
 
   if (!dnsOk.ok) {
-    log.error('DNS route Cloudflare Tunnel gagal.');
-    return;
+    logEvent("error", 'DNS route Cloudflare Tunnel gagal.');
+    return false;
   }
 
   if (info.installService) {
@@ -1988,8 +2640,8 @@ async function setupCloudflareTunnel(dryRun = false) {
     });
 
     if (!serviceInstallOk.ok) {
-      log.error('Install service cloudflared gagal.');
-      return;
+      logEvent("error", 'Install service cloudflared gagal.');
+      return false;
     }
 
     const serviceStartOk = await runCommandWithHandling({
@@ -2002,12 +2654,13 @@ async function setupCloudflareTunnel(dryRun = false) {
     });
 
     if (!serviceStartOk.ok) {
-      log.error('Start service cloudflared gagal.');
-      return;
+      logEvent("error", 'Start service cloudflared gagal.');
+      return false;
     }
   }
 
   renderSummary('Cloudflare Tunnel Siap', [
+    ['Status', statusBadge('success', 'DONE')],
     ['Nama Tunnel', info.tunnelName],
     ['Tunnel ID', tunnelData.tunnelId],
     ['Hostname', info.hostname],
@@ -2016,7 +2669,7 @@ async function setupCloudflareTunnel(dryRun = false) {
     ['Command Manual', `cloudflared tunnel --config "${info.configPath}" run ${tunnelData.tunnelId}`]
   ], successBorder);
 
-  note(
+  renderNote(
     [
       'Tunnel ini tidak membutuhkan IPv4 publik.',
       info.installService
@@ -2025,6 +2678,7 @@ async function setupCloudflareTunnel(dryRun = false) {
     ].join('\n'),
     'Cloudflare Tunnel'
   );
+  return true;
 }
 
 async function updateGitProject(project, dryRun = false) {
@@ -2039,20 +2693,20 @@ async function updateGitProject(project, dryRun = false) {
 
   const ownershipOk = await ensureAppOwnership(appPath, dryRun);
   if (!ownershipOk) {
-    log.error('Ownership project belum berhasil disiapkan.');
+    logEvent("error", 'Ownership project belum berhasil disiapkan.');
     return false;
   }
 
   if (project.profile.hasArtisan) {
     const envReady = prepareLaravelEnv(appPath, dryRun);
     if (!envReady) {
-      log.error('File .env belum berhasil disiapkan.');
+      logEvent("error", 'File .env belum berhasil disiapkan.');
       return false;
     }
   }
 
   for (let i = 0; i < gitCommands.length; i++) {
-    log.step(`Sinkronisasi Git ${i + 1}/${gitCommands.length}: ${gitCommands[i]}`);
+    logEvent("step", `Sinkronisasi Git ${i + 1}/${gitCommands.length}: ${gitCommands[i]}`);
     const result = await runCommandWithHandling({
       title: `Sinkronisasi Git ${i + 1}/${gitCommands.length}`,
       command: gitCommands[i],
@@ -2063,14 +2717,14 @@ async function updateGitProject(project, dryRun = false) {
     });
 
     if (!result.ok) {
-      log.error(`Update repository berhenti di langkah: ${gitCommands[i]}`);
+      logEvent("error", `Update repository berhenti di langkah: ${gitCommands[i]}`);
       return false;
     }
   }
 
   for (let i = 0; i < project.profile.installSteps.length; i++) {
     const step = project.profile.installSteps[i];
-    log.step(`Langkah update ${i + 1}/${project.profile.installSteps.length}: ${step}`);
+    logEvent("step", `Langkah update ${i + 1}/${project.profile.installSteps.length}: ${step}`);
 
     const result = await runCommandWithHandling({
       title: `Langkah Update ${i + 1}/${project.profile.installSteps.length}`,
@@ -2082,14 +2736,14 @@ async function updateGitProject(project, dryRun = false) {
     });
 
     if (!result.ok) {
-      log.error(`Update project berhenti di langkah: ${step}`);
+      logEvent("error", `Update project berhenti di langkah: ${step}`);
       return false;
     }
   }
 
   for (let i = 0; i < project.profile.postSteps.length; i++) {
     const step = project.profile.postSteps[i];
-    log.step(`Tahap akhir ${i + 1}/${project.profile.postSteps.length}: ${step}`);
+    logEvent("step", `Tahap akhir ${i + 1}/${project.profile.postSteps.length}: ${step}`);
 
     const result = await runCommandWithHandling({
       title: `Tahap Akhir ${i + 1}/${project.profile.postSteps.length}`,
@@ -2101,7 +2755,7 @@ async function updateGitProject(project, dryRun = false) {
     });
 
     if (!result.ok) {
-      log.error(`Tahap akhir project gagal dijalankan: ${step}`);
+      logEvent("error", `Tahap akhir project gagal dijalankan: ${step}`);
       return false;
     }
   }
@@ -2109,12 +2763,13 @@ async function updateGitProject(project, dryRun = false) {
   if (project.profile.hasArtisan || project.profile.hasLaravelDirs) {
     const permissionOk = await applyLaravelPermissions(appPath, dryRun);
     if (!permissionOk) {
-      log.error('Permission Laravel belum berhasil diterapkan.');
+      logEvent("error", 'Permission Laravel belum berhasil diterapkan.');
       return false;
     }
   }
 
   renderSummary('Update Project Selesai', [
+    ['Status', statusBadge('success', 'DONE')],
     ['Nama Project', project.name],
     ['Tipe', project.profile.category],
     ['Path', appPath],
@@ -2130,6 +2785,7 @@ async function updateGitProject(project, dryRun = false) {
 async function updateProject() {
   const mode = await askRunMode();
   const dryRun = mode === 'dry-run';
+  renderWorkflowHeader('Update Project', [['Mode', formatModeLabel(dryRun)]]);
   const projects = findManagedProjects();
   const searchRoots = getProjectSearchRoots();
 
@@ -2139,7 +2795,7 @@ async function updateProject() {
       `Belum ada project git yang terdeteksi.\n\nLokasi yang dicek:\n${searchRoots.join('\n')}`,
       infoBorder
     );
-    return;
+    return false;
   }
 
   renderSummary('Sumber Pencarian Project', [
@@ -2148,12 +2804,23 @@ async function updateProject() {
     ['Mode', formatModeLabel(dryRun)]
   ], infoBorder);
 
-  const selectedPath = await askProjectToUpdate(projects);
+  let selectedPath = '';
+  if (runtimeOptions.nonInteractive) {
+    const workflowConfig = getWorkflowConfig('update-project');
+    selectedPath = requiredNonInteractive(
+      'update-project',
+      'path project',
+      getEnvValue('PANZEK_UPDATE_PROJECT_PATH', workflowConfig.projectPath || '')
+    );
+  } else {
+    selectedPath = await askProjectToUpdate(projects);
+  }
+
   const project = projects.find((item) => item.path === selectedPath);
 
   if (!project) {
-    log.error('Project yang dipilih tidak ditemukan lagi.');
-    return;
+    logEvent("error", 'Project yang dipilih tidak ditemukan lagi.');
+    return false;
   }
 
   const updatePlan = buildProjectUpdatePlan(project);
@@ -2172,35 +2839,83 @@ async function updateProject() {
   renderSteps('Rencana Update', updatePlan);
 
   if (project.dirty) {
-    note(
+    renderNote(
       'Project ini punya perubahan lokal yang belum bersih. Jika update gagal saat pull, rapikan commit atau stash lebih dulu.',
       'Perhatian'
     );
   }
 
-  const confirmed = await askConfirm({
-    message: 'Lanjut update project ini?',
-    initialValue: true
-  });
+  const confirmed = runtimeOptions.nonInteractive
+    ? true
+    : await askConfirm({
+        message: 'Lanjut update project ini?',
+        initialValue: true
+      });
 
   if (!confirmed) {
-    log.warn('Update project dibatalkan.');
-    return;
+    logEvent("warn", 'Update project dibatalkan.');
+    return false;
   }
 
-  await updateGitProject(project, dryRun);
+  const ok = await updateGitProject(project, dryRun);
+  return ok;
 }
 
 async function deployLaravel() {
   const mode = await askRunMode();
   const dryRun = mode === 'dry-run';
-  const info = await askLaravelInfo();
-  const steps = await askUseDefaultSteps(getLaravelDefaultSteps());
-  const dbSetup = await askDatabaseSetup(info.targetDir);
+  renderWorkflowHeader('Deploy Laravel', [['Mode', formatModeLabel(dryRun)]]);
+  const workflowConfig = getWorkflowConfig('deploy-laravel');
+  const info = runtimeOptions.nonInteractive
+    ? {
+        repo: requiredNonInteractive(
+          'deploy-laravel',
+          'repo',
+          getEnvValue('PANZEK_DEPLOY_REPO', workflowConfig.repo || '')
+        ),
+        branch: requiredNonInteractive(
+          'deploy-laravel',
+          'branch',
+          getEnvValue('PANZEK_DEPLOY_BRANCH', workflowConfig.branch || 'main')
+        ),
+        targetDir: requiredNonInteractive(
+          'deploy-laravel',
+          'targetDir',
+          getEnvValue('PANZEK_DEPLOY_TARGET_DIR', workflowConfig.targetDir || '/var/www/laravel-app')
+        )
+      }
+    : await askLaravelInfo();
+
+  const steps = runtimeOptions.nonInteractive
+    ? Array.isArray(workflowConfig.steps) && workflowConfig.steps.length > 0
+      ? workflowConfig.steps
+      : getLaravelDefaultSteps()
+    : await askUseDefaultSteps(getLaravelDefaultSteps());
+
+  const dbSetup = runtimeOptions.nonInteractive
+    ? {
+        enabled: parseBoolValue(
+          getEnvValue('PANZEK_DB_ENABLED', workflowConfig.database?.enabled),
+          Boolean(workflowConfig.database?.enabled)
+        ),
+        dbName: sanitizeDbName(getEnvValue('PANZEK_DB_NAME', workflowConfig.database?.dbName || 'laravel_app')),
+        dbUser: sanitizeDbName(getEnvValue('PANZEK_DB_USER', workflowConfig.database?.dbUser || 'laravel_user')),
+        dbPassword: getEnvValue('PANZEK_DB_PASSWORD', workflowConfig.database?.dbPassword || generateRandomPassword(20)),
+        dbHost: getEnvValue('PANZEK_DB_HOST', workflowConfig.database?.dbHost || '127.0.0.1'),
+        dbPort: getEnvValue('PANZEK_DB_PORT', workflowConfig.database?.dbPort || '3306'),
+        adminConfig: {
+          mode: getEnvValue('PANZEK_DB_ADMIN_MODE', workflowConfig.database?.adminConfig?.mode || 'socket'),
+          user: getEnvValue('PANZEK_DB_ADMIN_USER', workflowConfig.database?.adminConfig?.user || 'root'),
+          password: getEnvValue('PANZEK_DB_ADMIN_PASSWORD', workflowConfig.database?.adminConfig?.password || ''),
+          host: getEnvValue('PANZEK_DB_ADMIN_HOST', workflowConfig.database?.adminConfig?.host || '127.0.0.1'),
+          port: getEnvValue('PANZEK_DB_ADMIN_PORT', workflowConfig.database?.adminConfig?.port || '3306')
+        }
+      }
+    : await askDatabaseSetup(info.targetDir);
 
   if (steps.length === 0) {
-    log.error('Tidak ada langkah deploy. Workflow dibatalkan.');
-    return;
+    logEvent("error", 'Tidak ada langkah deploy. Workflow dibatalkan.');
+    return false;
   }
 
   const summaryRows = [
@@ -2218,32 +2933,34 @@ async function deployLaravel() {
   renderSummary('Ringkasan Deploy Laravel', summaryRows);
   renderSteps('Rencana Eksekusi', steps);
 
-  const confirmed = await askConfirm({
-    message: 'Lanjut deploy Laravel?',
-    initialValue: true
-  });
+  const confirmed = runtimeOptions.nonInteractive
+    ? true
+    : await askConfirm({
+        message: 'Lanjut deploy Laravel?',
+        initialValue: true
+      });
 
   if (!confirmed) {
-    log.warn('Deploy Laravel dibatalkan.');
-    return;
+    logEvent("warn", 'Deploy Laravel dibatalkan.');
+    return false;
   }
 
   const repoSetup = await ensureGitRepo(info.repo, info.branch, info.targetDir, dryRun);
   if (!repoSetup.ok) {
-    log.error('Repository belum berhasil disiapkan.');
-    return;
+    logEvent("error", 'Repository belum berhasil disiapkan.');
+    return false;
   }
 
   const appPath = repoSetup.cwd;
 
   const envReady = prepareLaravelEnv(appPath, dryRun);
   if (!envReady) {
-    log.error('File .env belum berhasil disiapkan.');
-    return;
+    logEvent("error", 'File .env belum berhasil disiapkan.');
+    return false;
   }
 
   for (let i = 0; i < steps.length; i++) {
-    log.step(`Langkah ${i + 1}/${steps.length}: ${steps[i]}`);
+    logEvent("step", `Langkah ${i + 1}/${steps.length}: ${steps[i]}`);
 
     const result = await runCommandWithHandling({
       title: `Langkah ${i + 1}/${steps.length}`,
@@ -2255,18 +2972,18 @@ async function deployLaravel() {
     });
 
     if (!result.ok) {
-      log.error(`Deploy berhenti di langkah ${i + 1}: ${steps[i]}`);
-      return;
+      logEvent("error", `Deploy berhenti di langkah ${i + 1}: ${steps[i]}`);
+      return false;
     }
   }
 
   if (dbSetup.enabled) {
     if (!getMysqlClientCommand()) {
-      log.error('Client mysql/mariadb belum tersedia, jadi setup database tidak bisa dilanjutkan.');
-      return;
+      logEvent("error", 'Client mysql/mariadb belum tersedia, jadi setup database tidak bisa dilanjutkan.');
+      return false;
     }
 
-    log.step('Menyiapkan database MySQL/MariaDB...');
+    logEvent("step", 'Menyiapkan database MySQL/MariaDB...');
 
     const dbOk = await createMysqlDatabaseAndUser(
       {
@@ -2280,14 +2997,14 @@ async function deployLaravel() {
     );
 
     if (!dbOk) {
-      log.error('Database atau user MySQL belum berhasil dibuat.');
-      return;
+      logEvent("error", 'Database atau user MySQL belum berhasil dibuat.');
+      return false;
     }
 
     const envDbOk = updateLaravelDbEnv(appPath, dbSetup, dryRun);
     if (!envDbOk) {
-      log.error('Konfigurasi database di .env belum berhasil diperbarui.');
-      return;
+      logEvent("error", 'Konfigurasi database di .env belum berhasil diperbarui.');
+      return false;
     }
   }
 
@@ -2300,7 +3017,7 @@ async function deployLaravel() {
   ];
 
   for (let i = 0; i < postSteps.length; i++) {
-    log.step(`Tahap akhir ${i + 1}/${postSteps.length}: ${postSteps[i]}`);
+    logEvent("step", `Tahap akhir ${i + 1}/${postSteps.length}: ${postSteps[i]}`);
     const result = await runCommandWithHandling({
       title: `Tahap Akhir ${i + 1}/${postSteps.length}`,
       command: postSteps[i],
@@ -2310,18 +3027,36 @@ async function deployLaravel() {
       message: 'Tahap akhir Laravel ini belum berhasil dijalankan.'
     });
     if (!result.ok) {
-      log.error(`Tahap akhir Laravel gagal dijalankan: ${postSteps[i]}`);
-      return;
+      logEvent("error", `Tahap akhir Laravel gagal dijalankan: ${postSteps[i]}`);
+      return false;
     }
   }
 
   const permissionOk = await applyLaravelPermissions(appPath, dryRun);
   if (!permissionOk) {
-    log.error('Permission Laravel belum berhasil diterapkan.');
-    return;
+    logEvent("error", 'Permission Laravel belum berhasil diterapkan.');
+    return false;
+  }
+
+  const runHealthCheck = runtimeOptions.nonInteractive
+    ? parseBoolValue(
+        getEnvValue('PANZEK_HEALTH_CHECK', workflowConfig.healthCheck),
+        workflowConfig.healthCheck === undefined ? true : Boolean(workflowConfig.healthCheck)
+      )
+    : await askConfirm({
+        message: 'Jalankan health check setelah deploy?',
+        initialValue: true
+      });
+  if (runHealthCheck) {
+    const healthOk = await runLaravelHealthCheck(appPath, dryRun);
+    if (!healthOk) {
+      logEvent("error", 'Health check pasca deploy gagal.');
+      return false;
+    }
   }
 
   renderSummary('Deploy Laravel Selesai', [
+    ['Status', statusBadge('success', 'DONE')],
     ['Folder Aplikasi', appPath],
     ['Nginx Root', path.join(appPath, 'public')],
     ['Mode', formatModeLabel(dryRun)]
@@ -2331,18 +3066,39 @@ async function deployLaravel() {
     renderSummary('Kredensial Database', [
       ['Database', dbSetup.dbName],
       ['Username', dbSetup.dbUser],
-      ['Password', dbSetup.dbPassword],
+      ['Password', maskSecretValue(dbSetup.dbPassword)],
       ['Host', dbSetup.dbHost],
       ['Port', dbSetup.dbPort]
     ], successBorder);
-    note('Simpan kredensial ini dengan aman sebelum lanjut ke server produksi.', 'Catatan');
+    renderNote('Simpan kredensial ini dengan aman sebelum lanjut ke server produksi.', 'Catatan');
   }
+  return true;
 }
 
 async function setupNginx() {
   const mode = await askRunMode();
   const dryRun = mode === 'dry-run';
-  const info = await askNginxInfo();
+  renderWorkflowHeader('Setup Nginx', [['Mode', formatModeLabel(dryRun)]]);
+  const workflowConfig = getWorkflowConfig('setup-nginx');
+  const info = runtimeOptions.nonInteractive
+    ? {
+        domain: requiredNonInteractive(
+          'setup-nginx',
+          'domain',
+          getEnvValue('PANZEK_NGINX_DOMAIN', workflowConfig.domain || '')
+        ),
+        appPath: requiredNonInteractive(
+          'setup-nginx',
+          'appPath',
+          getEnvValue('PANZEK_NGINX_APP_PATH', workflowConfig.appPath || '/var/www/laravel-app')
+        ),
+        phpVersion: requiredNonInteractive(
+          'setup-nginx',
+          'phpVersion',
+          getEnvValue('PANZEK_NGINX_PHP_VERSION', workflowConfig.phpVersion || '8.3')
+        )
+      }
+    : await askNginxInfo();
 
   renderSummary('Ringkasan Setup Nginx', [
     ['Domain', info.domain],
@@ -2352,47 +3108,54 @@ async function setupNginx() {
     ['Mode', formatModeLabel(dryRun)]
   ]);
 
-  const confirmed = await askConfirm({
-    message: 'Lanjut setup Nginx?',
-    initialValue: true
-  });
+  const confirmed = runtimeOptions.nonInteractive
+    ? true
+    : await askConfirm({
+        message: 'Lanjut setup Nginx?',
+        initialValue: true
+      });
 
   if (!confirmed) {
-    log.warn('Setup Nginx dibatalkan.');
-    return;
+    logEvent("warn", 'Setup Nginx dibatalkan.');
+    return false;
   }
 
   const ok = await setupNginxConfig(info, dryRun);
   if (!ok) {
-    log.error('Setup Nginx belum berhasil diselesaikan.');
-    return;
+    logEvent("error", 'Setup Nginx belum berhasil diselesaikan.');
+    return false;
   }
 
   renderSummary('Setup Nginx Selesai', [
+    ['Status', statusBadge('success', 'DONE')],
     ['Domain', info.domain],
     ['Config', `/etc/nginx/sites-available/${info.domain}`],
     ['Root', path.join(path.resolve(info.appPath), 'public')]
   ], successBorder);
+  return true;
 }
 
 async function setupCloudflare() {
   const mode = await askRunMode();
   const dryRun = mode === 'dry-run';
+  renderWorkflowHeader('Setup Cloudflare', [['Mode', formatModeLabel(dryRun)]]);
 
-  const workflow = await askSelect({
-    message: 'Pilih workflow Cloudflare',
-    initialValue: 'tunnel',
-    options: [
-      { value: 'tunnel', label: 'Cloudflare Tunnel', hint: 'publish service tanpa IPv4 publik' },
-      { value: 'back', label: 'Kembali' }
-    ]
-  });
+  const workflow = runtimeOptions.nonInteractive
+    ? 'tunnel'
+    : await askSelect({
+        message: 'Pilih workflow Cloudflare',
+        initialValue: 'tunnel',
+        options: [
+          { value: 'tunnel', label: 'Cloudflare Tunnel', hint: 'publish service tanpa IPv4 publik' },
+          { value: 'back', label: 'Kembali' }
+        ]
+      });
 
   if (workflow === 'back') {
-    return;
+    return false;
   }
 
-  await setupCloudflareTunnel(dryRun);
+  return setupCloudflareTunnel(dryRun);
 }
 
 async function mainMenu() {
@@ -2404,34 +3167,123 @@ async function mainMenu() {
       { value: 'setup-nginx', label: 'Setup Nginx', hint: 'buat dan aktifkan virtual host' },
       { value: 'setup-cloudflare', label: 'Setup Cloudflare', hint: 'cloudflared tunnel tanpa IPv4 publik' },
       { value: 'update-project', label: 'Update Project', hint: 'pilih project lalu update otomatis' },
+      { value: 'setup-server', label: 'Bootstrap Server', hint: 'install dependency deploy untuk server baru' },
+      { value: 'fix-permissions', label: 'Fix Permissions', hint: 'normalisasi permission standar Laravel' },
+      { value: 'preflight', label: 'Preflight Check', hint: 'cek readiness tanpa eksekusi perubahan' },
       { value: 'exit', label: 'Keluar' }
     ]
   });
 }
 
 async function main() {
+  appendSessionLog(`[session:start] cwd="${process.cwd()}" argv=${JSON.stringify(process.argv.slice(2))}`);
+  if (outputMode === 'json') {
+    renderSummary('Session Log', [
+      ['File Log', sessionLogPath],
+      ['Theme', runtimeOptions.theme],
+      ['Output', outputMode],
+      ['Color', runtimeOptions.noColor ? 'off' : 'on']
+    ], infoBorder);
+  } else {
+    const sessionInline = [
+      chalk.hex('#94a3b8')('log'),
+      chalk.white(sessionLogPath),
+      chalk.hex('#64748b')('|'),
+      chalk.hex('#94a3b8')('theme'),
+      chalk.hex('#38bdf8')(runtimeOptions.theme),
+      chalk.hex('#64748b')('|'),
+      chalk.hex('#94a3b8')('output'),
+      chalk.hex('#fbbf24')(outputMode),
+      chalk.hex('#64748b')('|'),
+      chalk.hex('#94a3b8')('color'),
+      chalk.white(runtimeOptions.noColor ? 'off' : 'on')
+    ].join(' ');
+    console.log(`${sessionInline}\n`);
+  }
+  executionReport.mode = runtimeOptions.dryRun ? 'dry-run' : 'normal';
+
+  if (runtimeOptions.showHelp) {
+    renderHelp();
+    executionReport.success = true;
+    appendSessionLog('[session:end] help');
+    writeExecutionReport();
+    exitWith(EXIT_CODE_SUCCESS, 'help');
+  }
+  if (runtimeOptions.previewTheme) {
+    previewThemes();
+    executionReport.success = true;
+    appendSessionLog('[session:end] preview theme');
+    writeExecutionReport();
+    exitWith(EXIT_CODE_SUCCESS, 'preview theme');
+  }
+
+  if (runtimeOptions.nonInteractive && !runtimeOptions.action) {
+    const message = 'Mode --non-interactive membutuhkan --action agar workflow bisa dijalankan tanpa menu.';
+    executionReport.error = message;
+    executionReport.success = false;
+    writeExecutionReport();
+    renderPanel('Argumen Tidak Valid', message, errorBorder);
+    exitWith(EXIT_CODE_VALIDATION_ERROR, message);
+  }
+
   if (!commandExists('git')) {
     renderPanel('Dependency Belum Tersedia', 'git belum terinstall di server ini.', errorBorder);
-    process.exit(1);
+    executionReport.error = 'git belum terinstall';
+    appendSessionLog('[session:end] missing dependency git');
+    writeExecutionReport();
+    exitWith(EXIT_CODE_DEPENDENCY_ERROR, 'missing git');
+  }
+
+  const runAction = async (action) => {
+    executionReport.action = action;
+    if (action === 'deploy-laravel') {
+      return deployLaravel();
+    }
+    if (action === 'setup-nginx') {
+      return setupNginx();
+    }
+    if (action === 'setup-cloudflare') {
+      return setupCloudflare();
+    }
+    if (action === 'update-project') {
+      return updateProject();
+    }
+    if (action === 'setup-server') {
+      return setupServerDependencies();
+    }
+    if (action === 'fix-permissions') {
+      return fixPermissionsWorkflow();
+    }
+    if (action === 'preflight') {
+      return runPreflight();
+    }
+    renderOutro('Sampai jumpa.');
+    executionReport.success = true;
+    writeExecutionReport();
+    exitWith(EXIT_CODE_SUCCESS, 'exit action');
+  };
+
+  if (runtimeOptions.action) {
+    if (runtimeOptions.showBanner) {
+      renderBanner();
+    }
+    const ok = await runAction(runtimeOptions.action);
+    executionReport.success = Boolean(ok);
+    renderOutro('Sampai jumpa.');
+    appendSessionLog('[session:end] action mode complete');
+    writeExecutionReport();
+    exitWith(ok ? EXIT_CODE_SUCCESS : EXIT_CODE_ACTION_FAILED, 'action mode complete');
   }
 
   while (true) {
-    renderBanner();
+    if (runtimeOptions.showBanner) {
+      renderBanner();
+    }
 
     const action = await mainMenu();
 
-    if (action === 'deploy-laravel') {
-      await deployLaravel();
-    } else if (action === 'setup-nginx') {
-      await setupNginx();
-    } else if (action === 'setup-cloudflare') {
-      await setupCloudflare();
-    } else if (action === 'update-project') {
-      await updateProject();
-    } else {
-      outro('Sampai jumpa.');
-      process.exit(0);
-    }
+    const ok = await runAction(action);
+    executionReport.success = Boolean(ok);
 
     const again = await askConfirm({
       message: 'Balik ke menu utama?',
@@ -2439,13 +3291,50 @@ async function main() {
     });
 
     if (!again) {
-      outro('Sampai jumpa.');
-      process.exit(0);
+      renderOutro('Sampai jumpa.');
+      appendSessionLog('[session:end] user exit');
+      writeExecutionReport();
+      exitWith(EXIT_CODE_SUCCESS, 'user exit');
     }
   }
 }
 
+let runtimeOptions;
+let runtimeConfig = {};
+
+try {
+  try {
+    runtimeOptions = parseRuntimeOptions();
+  } catch (error) {
+    renderPanel('Argumen Tidak Valid', error.message, errorBorder);
+    exitWith(EXIT_CODE_VALIDATION_ERROR, `invalid args: ${error.message}`);
+  }
+  outputMode = runtimeOptions.output || 'table';
+  if (outputMode === 'json') {
+    runtimeOptions.showBanner = false;
+  }
+  applyColorPolicy();
+  runtimeConfig = readJsonFileSafe(runtimeOptions.configPath);
+} catch (error) {
+  renderPanel('Config Tidak Valid', error.message, errorBorder);
+  exitWith(EXIT_CODE_VALIDATION_ERROR, `invalid config: ${error.message}`);
+}
+
+if (runtimeOptions.nonInteractive) {
+  runtimeOptions.assumeYes = true;
+}
+if (parseBoolValue(getEnvValue('PANZEK_DRY_RUN', ''), false)) {
+  runtimeOptions.dryRun = true;
+  runtimeOptions.mode = 'dry-run';
+}
+runtimeOptions.theme = getEnvValue('PANZEK_THEME', runtimeOptions.theme || 'amber');
+applyTheme(runtimeOptions.theme);
+
 main().catch((error) => {
+  executionReport.error = error.message;
+  executionReport.success = false;
+  writeExecutionReport();
+  appendSessionLog(`[session:crash] ${error.stack || error.message}`);
   renderPanel('Unhandled Error', error.message, errorBorder);
-  process.exit(1);
+  exitWith(EXIT_CODE_RUNTIME_ERROR, `unhandled: ${error.message}`);
 });

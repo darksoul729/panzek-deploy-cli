@@ -1,6 +1,13 @@
 # Panzek Deploy CLI
 
-CLI interaktif untuk deploy dan maintenance project Laravel di server. Fokusnya bukan hanya menjalankan command, tetapi membuat alur deploy, update, setup database, setup Nginx, dan Cloudflare Tunnel terasa rapi saat dipakai langsung di terminal.
+CLI interaktif untuk deploy dan maintenance project Laravel di server.
+
+Fokus utama:
+- deploy Laravel end-to-end
+- setup Nginx + rollback aman
+- setup Cloudflare Tunnel
+- bootstrap dependency server
+- mode CI/non-interactive yang bisa diparse mesin
 
 ## Preview
 
@@ -9,16 +16,20 @@ CLI interaktif untuk deploy dan maintenance project Laravel di server. Fokusnya 
 ## Fitur Utama
 
 - Wizard interaktif berbasis `@clack/prompts`
-- Tampilan terminal yang sudah dipoles dengan panel, summary card, katalog project, dan execution plan
-- Deploy Laravel dari repository Git
-- Update project yang sudah ada dengan memilih dari daftar project terdeteksi
-- Setup database MySQL/MariaDB beserta user otomatis
-- Dukungan login admin database via `sudo` socket, login biasa, dan login dengan `--ssl=off`
-- Setup Nginx lengkap dengan validasi config dan rollback bila gagal
-- Setup Cloudflare Tunnel dengan `cloudflared` named tunnel tanpa IPv4 publik
-- Retry per langkah saat gagal tanpa mengulang wizard dari awal
-- Error card dengan potongan output, kemungkinan penyebab, dan saran tindak lanjut
-- Mode `dry-run` untuk pratinjau alur sebelum eksekusi
+- Fetch-style header di terminal
+- Action langsung via `--action`
+- `--mode normal|dry-run` untuk kontrol mode tanpa prompt
+- `--output json` (JSONL strict) untuk CI/pipeline
+- `--theme amber|ocean|mono|auto`
+- `--preview-theme` untuk lihat preset tema
+- Retry per langkah dengan `--max-retries`
+- Deploy Laravel dari repo Git
+- Setup database MySQL/MariaDB + update `.env`
+- Setup Nginx + validasi + rollback
+- Setup Cloudflare Tunnel (`cloudflared`)
+- Bootstrap server dependency lintas package manager
+- Fix permission Laravel
+- Preflight check readiness server
 
 ## Instalasi
 
@@ -34,120 +45,232 @@ Install global dari source lokal:
 npm install -g .
 ```
 
-Atau jalankan langsung dari folder project:
+Jalankan dari source:
 
 ```bash
 npm install
 npm start
 ```
 
-## Panduan Global
-
-Jika sudah terinstall secara global, command yang dipakai adalah:
-
-```bash
-panzek-deploy
-```
-
-Untuk update versi global:
-
-```bash
-npm install -g panzek-deploy-cli@latest
-```
-
-Untuk hapus instalasi global:
-
-```bash
-npm uninstall -g panzek-deploy-cli
-```
-
-Jika command `panzek-deploy` belum terbaca, cek lokasi binary global npm:
-
-```bash
-npm bin -g
-```
-
-Pastikan hasil path tersebut sudah masuk ke `PATH` shell Anda.
-
 ## Menjalankan
 
-Jika terpasang global:
+Global:
 
 ```bash
 panzek-deploy
 ```
 
-Jika dijalankan dari folder source:
+Dari source:
 
 ```bash
 node index.js
 ```
 
-## Menu Utama
+## Opsi CLI
 
-### 1. Deploy Laravel
+```bash
+panzek-deploy --help
+```
 
-Flow ini dipakai untuk project baru atau deployment ulang dari repository Git.
+- `--action <nama>`: `deploy-laravel`, `setup-nginx`, `setup-cloudflare`, `update-project`, `setup-server`, `fix-permissions`, `preflight`
+- `--mode <normal|dry-run>`
+- `--dry-run`
+- `--theme <amber|ocean|mono|auto>`
+- `--preview-theme`
+- `--output <table|json>`
+- `--no-color`
+- `--max-retries <angka>` (default `3`)
+- `--yes`
+- `--non-interactive`
+- `--config <path>` (default `./panzek.config.json`)
+- `--report-json <path>`
+- `--no-banner`
 
-Yang dikerjakan:
+Contoh:
 
-- pilih mode `Jalankan langsung` atau `Pratinjau`
-- clone atau update repository
-- siapkan `.env`
-- jalankan langkah build bawaan atau custom
-- buat database dan user MySQL/MariaDB
-- update kredensial database ke `.env`
-- jalankan `key:generate`, `migrate`, `optimize:clear`, dan `optimize`
-- rapikan permission Laravel
+```bash
+panzek-deploy --action preflight --non-interactive
+panzek-deploy --action preflight --output json --no-color
+panzek-deploy --action deploy-laravel --non-interactive --config ./panzek.config.json --report-json ./report.json
+panzek-deploy --preview-theme
+```
 
-### 2. Setup Nginx
+Catatan output JSON:
+- Saat `--output json` aktif, output ditulis sebagai JSON line (`jsonl`) agar aman diparse pipeline.
 
-Flow ini membuat virtual host untuk project Laravel.
+## Konfigurasi Non-Interactive
 
-Yang dikerjakan:
+Contoh:
 
-- validasi domain, path project, dan versi PHP-FPM
-- generate config Nginx
-- salin ke `sites-available`
-- aktifkan lewat `sites-enabled`
-- jalankan `nginx -t`
-- reload service Nginx
-- rollback config bila validasi atau reload gagal
+```json
+{
+  "workflows": {
+    "deploy-laravel": {
+      "repo": "https://github.com/acme/laravel-app.git",
+      "branch": "main",
+      "targetDir": "/var/www/laravel-app",
+      "steps": [
+        "composer install --no-dev --optimize-autoloader",
+        "npm install",
+        "npm run build"
+      ],
+      "database": {
+        "enabled": true,
+        "dbName": "laravel_app",
+        "dbUser": "laravel_user",
+        "dbPassword": "secret"
+      }
+    },
+    "setup-nginx": {
+      "domain": "app.example.com",
+      "appPath": "/var/www/laravel-app",
+      "phpVersion": "8.3"
+    },
+    "setup-cloudflare": {
+      "tunnelName": "app-tunnel",
+      "hostname": "app.example.com",
+      "serviceUrl": "http://localhost:80",
+      "configPath": "/etc/cloudflared/app.yml",
+      "installService": true,
+      "runLogin": false
+    },
+    "update-project": {
+      "projectPath": "/var/www/laravel-app"
+    }
+  }
+}
+```
 
-### 3. Setup Cloudflare
+Template siap pakai:
+- `./panzek.config.ci.example.json`
 
-Flow ini fokus ke `cloudflared` named tunnel agar service bisa dipublish tanpa IPv4 publik.
+## Workflow
 
-Yang dikerjakan:
+1. `deploy-laravel`
+- clone/update repo
+- setup `.env`
+- build steps
+- setup DB
+- artisan post-deploy
+- fix permission
 
-- login `cloudflared tunnel login`
+2. `setup-nginx`
+- validasi domain/path/php-fpm
+- generate config
+- `nginx -t`
+- reload service
+- rollback jika gagal
+
+3. `setup-cloudflare`
 - create named tunnel
-- generate config ingress
-- validate ingress
-- create DNS route ke hostname publik
-- optional install dan start service `cloudflared`
+- ingress validate
+- DNS route
+- optional install/start service
 
-### 4. Update Project
+4. `update-project`
+- scan project Git
+- pull + build + artisan (jika Laravel)
 
-Flow ini dipakai untuk project yang sudah ada di server.
+5. `setup-server`
+- deteksi dependency
+- install package wajib/opsional (`apt`, `dnf`, `yum`, `apk`, `pacman`)
 
-Yang dikerjakan:
+6. `fix-permissions`
+- normalisasi permission Laravel
 
-- scan project Git dari lokasi umum seperti `/var/www` dan folder kerja saat ini
-- tampilkan katalog project yang terdeteksi
-- pilih project dari daftar
-- jalankan `git fetch`, `git checkout`, dan `git pull`
-- jalankan `composer install`, `npm install`, dan `npm run build` bila relevan
-- untuk Laravel, lanjut `migrate`, `optimize:clear`, `optimize`, dan perbaikan permission
+7. `preflight`
+- readiness check tanpa perubahan sistem
+
+## Log, Report, Exit Code
+
+Log sesi:
+
+```bash
+/tmp/panzek/logs/panzek-<timestamp>.log
+```
+
+Exit code:
+- `0` sukses
+- `1` runtime error
+- `2` validasi arg/config gagal
+- `3` dependency wajib tidak tersedia
+- `4` workflow gagal
+
+## Keamanan
+
+- Nilai sensitif dimasking di log/report
+- Pola password/token dibersihkan dari output report
 
 ## Kebutuhan Umum
 
-- Node.js 18+
+- Node.js `>=18`
 - `git`
 - `composer`
 - `npm`
 - `php`
-- `mysql` atau `mariadb` client
+- `mysql`/`mariadb` client
+
+## Publish npm v2.0.0
+
+Berikut langkah rilis mayor ke npm sebagai versi `2.0.0`.
+
+1. Pastikan login npm:
+
+```bash
+npm whoami
+```
+
+Kalau belum login:
+
+```bash
+npm login
+```
+
+2. Pastikan branch bersih dan test lolos:
+
+```bash
+git status
+npm run check
+npm test
+```
+
+3. Naikkan versi package:
+
+```bash
+npm version 2.0.0
+```
+
+Perintah ini otomatis:
+- update `package.json`
+- update `package-lock.json`
+- bikin git tag `v2.0.0`
+
+4. Push commit + tag:
+
+```bash
+git push origin main
+git push origin v2.0.0
+```
+
+5. Publish ke npm:
+
+```bash
+npm publish --access public
+```
+
+6. Verifikasi versi live:
+
+```bash
+npm view panzek-deploy-cli version
+```
+
+Harus keluar `2.0.0`.
+
+### Quick Path (sekali jalan)
+
+```bash
+npm run check && npm test && npm version 2.0.0 && git push origin main --follow-tags && npm publish --access public
+```
 
 ## Repository
 

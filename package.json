@@ -1,6 +1,6 @@
 {
   "name": "panzek-deploy-cli",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Interactive Laravel deployment CLI with database and Nginx setup workflows",
   "type": "module",
   "main": "index.js",
@@ -9,13 +9,15 @@
   },
   "files": [
     "index.js",
+    "panzek.config.ci.example.json",
     "assets",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js"
+    "check": "node --check index.js",
+    "test": "node --test"
   },
   "keywords": [
     "cli",
@@ -47,6 +49,10 @@
     "boxen": "^8.0.1",
     "chalk": "^5.3.0",
     "cli-table3": "^0.6.5",
-    "gradient-string": "^3.0.0"
+    "gradient-string": "^3.0.0",
+    "log-symbols": "^7.0.1",
+    "ora": "^9.4.0",
+    "string-width": "^8.2.1",
+    "wrap-ansi": "^10.0.0"
   }
 }

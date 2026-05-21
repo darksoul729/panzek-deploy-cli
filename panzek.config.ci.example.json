@@ -1,0 +1,45 @@
+{
+  "workflows": {
+    "deploy-laravel": {
+      "repo": "https://github.com/acme/laravel-app.git",
+      "branch": "main",
+      "targetDir": "/var/www/laravel-app",
+      "steps": [
+        "composer install --no-dev --optimize-autoloader",
+        "npm install",
+        "npm run build"
+      ],
+      "database": {
+        "enabled": true,
+        "dbName": "laravel_app",
+        "dbUser": "laravel_user",
+        "dbPassword": "change-me",
+        "dbHost": "127.0.0.1",
+        "dbPort": "3306",
+        "adminConfig": {
+          "mode": "socket",
+          "user": "root",
+          "password": "",
+          "host": "127.0.0.1",
+          "port": "3306"
+        }
+      }
+    },
+    "setup-nginx": {
+      "domain": "app.example.com",
+      "appPath": "/var/www/laravel-app",
+      "phpVersion": "8.3"
+    },
+    "setup-cloudflare": {
+      "tunnelName": "app-tunnel",
+      "hostname": "app.example.com",
+      "serviceUrl": "http://localhost:80",
+      "configPath": "/etc/cloudflared/app.yml",
+      "installService": true,
+      "runLogin": false
+    },
+    "update-project": {
+      "projectPath": "/var/www/laravel-app"
+    }
+  }
+}
